@@ -82,6 +82,8 @@ pub struct ConvertConfig {
   pub themes: Slice<string>,
   pub config: string,
   pub frameworks: Slice<string>,
+  pub verbose: int,
+  pub quiet: bool,
 }
 
 pub struct ConvertResult {
@@ -156,6 +158,8 @@ pub fn convert(cfg: ConvertConfig) -> Result<ConvertResult, error> {
       themes: cfg.themes.clone(),
       config: cfg.config,
       frameworks: cfg.frameworks.clone(),
+      verbose: cfg.verbose,
+      quiet: cfg.quiet,
     },
     ..,
   }

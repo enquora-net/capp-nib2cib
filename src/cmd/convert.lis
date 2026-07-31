@@ -25,6 +25,8 @@ fn run_convert(cmd: Ref<cobra.Command>, args: Slice<string>) {
     themes: flags.themes,
     config: flags.config,
     frameworks: flags.frameworks,
+    verbose: flags.verbose,
+    quiet: flags.quiet,
   }
   match convert.convert(cfg) {
     Ok(result) => {

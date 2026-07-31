@@ -7,12 +7,20 @@
 //
 // Phase 1: ResolveProjectPaths
 //
-// Finds the project root (walking upward from the current working directory,
-// so the tool runs correctly from any point in the source tree — mirroring
+// Finds the project root by walking upward from a start directory, so the
+// tool runs correctly from any point in the source tree — mirroring
 // capp-build's find_project_root/is_project_root in build/context.lis,
 // duplicated here rather than shared: capp-ast is being wound down as a
 // stopgap and capp-build is currently paused, so neither is a sound place to
-// extract shared code to right now).
+// extract shared code to right now.
+//
+// The start directory is NOT always the current working directory: it is
+// derived from ctx.config.input when input names a path, and falls back to
+// cwd only when input is empty. INPUT commonly names a tree the tool was
+// not invoked from (e.g. "capp-nib2cib convert ~/Desktop/some-project" run
+// from inside capp-nib2cib's own checkout) — searching upward from cwd in
+// that case searches the wrong tree entirely and fails even when the named
+// project is perfectly valid.
 //
 // Also expands ctx.config.input into the concrete set of conversion targets:
 //   input omitted     -> every .xib under the project root
@@ -25,6 +33,7 @@
 //
 // **
 import "go:errors"
+import "go:fmt"
 import "go:os"
 import "go:path/filepath"
 import "go:strings"
@@ -50,6 +59,17 @@ fn is_project_root(dir: string) -> bool {
   let fwk = filepath.Join(dir, "Frameworks", "Foundation")
   if os.Stat(fwk).map_or(false, |info| info.IsDir()) { return true }
   os.Stat(filepath.Join(dir, "Info.plist")).is_ok()
+}
+
+// resolve_search_start returns the directory find_project_root should begin
+// its upward walk from. Empty input has no location of its own to search
+// from, so it falls back to the current working directory; anything else is
+// searched from where it actually points — the containing directory for a
+// file, the directory itself otherwise.
+fn resolve_search_start(input: string) -> Result<string, error> {
+  if input == "" { return os.Getwd() }
+  let info = os.Stat(input)?
+  if info.IsDir() { Ok(input) } else { Ok(filepath.Dir(input)) }
 }
 
 // Walks upward from start until a project root sentinel is found. Returns
@@ -161,9 +181,26 @@ pub struct ResolveProjectPathsResult {
 }
 
 pub fn run_resolve_project_paths(ctx: Ref<PipelineContext>) -> Result<ResolveProjectPathsResult, error> {
-  let cwd = os.Getwd()?
-  let root = find_project_root(cwd)?
+  let start = resolve_search_start(ctx.config.input)?
+  let root = find_project_root(start)?
   let targets = expand_input(ctx.config.input, &root)?
+
+  // Status output: this is the only phase whose success is otherwise
+  // invisible to the user — phases 2 and 6 report a target count read from
+  // this phase's result, but nothing reports the root path or the target
+  // list itself. Gated by --quiet; per-target detail additionally gated by
+  // --verbose.
+  if !ctx.config.quiet {
+    fmt.Println(
+      f"✓  resolve-project-paths: root={root.path} targets={targets.length()}",
+    )
+    if ctx.config.verbose >= 1 {
+      for t in targets {
+        fmt.Println(f"     {t.xib_path} -> {t.cib_path}")
+      }
+    }
+  }
+
   if targets.is_empty() {
     return Ok(
       ResolveProjectPathsResult {
