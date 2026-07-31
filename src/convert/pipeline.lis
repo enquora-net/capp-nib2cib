@@ -181,11 +181,7 @@ pub fn convert(cfg: ConvertConfig) -> Result<ConvertResult, error> {
 
   let n = ctx.paths.map_or(0, |r| r.targets.length())
   Ok(
-    ConvertResult {
-      ok: true,
-      message: f"convert complete: {n} target(s)",
-      ..,
-    },
+    ConvertResult { ok: true, message: f"convert complete: {n} target(s)", .. },
   )
 }
 

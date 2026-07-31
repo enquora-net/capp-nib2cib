@@ -1,0 +1,199 @@
+//**
+// cmd/cmd.lis
+// capp-nib2cib
+//
+// Created by David Richardson on Thursday, July 30, 2026.
+// Copyright (c) 2026 David Richardson. All rights reserved.
+//
+// Shared cobra scaffolding, the root command, and the package's single
+// entry point (execute). main.lis is a thin consumer of this package —
+// it does not construct or register any command itself.
+//
+// **
+import "go:github.com/spf13/cobra"
+
+// ---------------------------------------------------------------------------
+// Shared cobra scaffolding
+// ---------------------------------------------------------------------------
+
+pub type RunFn = fn(Ref<cobra.Command>, Slice<string>) -> ()
+
+fn no_args(cmd: Ref<cobra.Command>, args: Slice<string>) -> Result<(), error> {
+  cobra.NoArgs(cmd, args)
+}
+
+fn noop_run(_cmd: Ref<cobra.Command>, _args: Slice<string>) {}
+
+fn completion_options() -> cobra.CompletionOptions {
+  cobra.CompletionOptions {
+    DisableDefaultCmd: false,
+    DisableNoDescFlag: false,
+    DisableDescriptions: false,
+    HiddenDefaultCmd: false,
+    DefaultShellCompDirective: Some(cobra.ShellCompDirectiveDefault),
+    ..,
+  }
+}
+
+fn fparse_err_whitelist() -> cobra.FParseErrWhitelist {
+  cobra.FParseErrWhitelist { UnknownFlags: false }
+}
+
+pub fn make_command(use: string, short: string, run: RunFn) -> cobra.Command {
+  cobra.Command {
+    Use: use,
+    Short: short,
+    Args: Some(no_args as cobra.PositionalArgs),
+    Annotations: Map.new<string, string>(),
+    PersistentPreRun: Some(noop_run as RunFn),
+    PersistentPreRunE: None,
+    PreRun: Some(noop_run as RunFn),
+    PreRunE: None,
+    Run: Some(run),
+    RunE: None,
+    PostRun: Some(noop_run as RunFn),
+    PostRunE: None,
+    PersistentPostRun: Some(noop_run as RunFn),
+    PersistentPostRunE: None,
+    ValidArgsFunction: None,
+    FParseErrWhitelist: fparse_err_whitelist(),
+    CompletionOptions: completion_options(),
+    SilenceErrors: true,
+    SilenceUsage: true,
+    SuggestionsMinimumDistance: 2,
+    ..,
+  }
+}
+
+// make_command_with_max_args builds a command whose positional args are
+// capped at `max` (0 disables all positional args via cobra.NoArgs).
+pub fn make_command_with_max_args(
+  use: string,
+  short: string,
+  run: RunFn,
+  max: int,
+) -> cobra.Command {
+  let args_check = if max == 0 {
+    no_args as cobra.PositionalArgs
+  } else {
+    cobra.MaximumNArgs(max)
+  }
+  cobra.Command {
+    Use: use,
+    Short: short,
+    Args: Some(args_check),
+    Annotations: Map.new<string, string>(),
+    PersistentPreRun: Some(noop_run as RunFn),
+    PersistentPreRunE: None,
+    PreRun: Some(noop_run as RunFn),
+    PreRunE: None,
+    Run: Some(run),
+    RunE: None,
+    PostRun: Some(noop_run as RunFn),
+    PostRunE: None,
+    PersistentPostRun: Some(noop_run as RunFn),
+    PersistentPostRunE: None,
+    ValidArgsFunction: None,
+    FParseErrWhitelist: fparse_err_whitelist(),
+    CompletionOptions: completion_options(),
+    SilenceErrors: true,
+    SilenceUsage: true,
+    SuggestionsMinimumDistance: 2,
+    ..,
+  }
+}
+
+pub fn make_group(use: string, short: string) -> cobra.Command {
+  cobra.Command {
+    Use: use,
+    Short: short,
+    Args: Some(no_args as cobra.PositionalArgs),
+    Annotations: Map.new<string, string>(),
+    PersistentPreRun: Some(noop_run as RunFn),
+    PersistentPreRunE: None,
+    PreRun: None,
+    PreRunE: None,
+    Run: None,
+    RunE: None,
+    PostRun: None,
+    PostRunE: None,
+    PersistentPostRun: Some(noop_run as RunFn),
+    PersistentPostRunE: None,
+    ValidArgsFunction: None,
+    FParseErrWhitelist: fparse_err_whitelist(),
+    CompletionOptions: completion_options(),
+    SilenceErrors: true,
+    SilenceUsage: true,
+    SuggestionsMinimumDistance: 2,
+    ..,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shared flags — convert and watch both take the full set
+// ---------------------------------------------------------------------------
+
+pub fn add_shared_flags(cmd: Ref<cobra.Command>) {
+  let _ = cmd.Flags().String("default-theme", "", "override default theme name")
+  let _ = cmd
+    .Flags()
+    .StringArrayP("theme", "t", [], "additional theme (repeatable)")
+  let _ = cmd
+    .Flags()
+    .String("config", "", "path to Info.plist for font/size override")
+  let _ = cmd
+    .Flags()
+    .StringArrayP("framework", "F", [], "framework to load (repeatable)")
+  let _ = cmd.Flags().CountP("verbose", "v", "increase verbosity (repeatable)")
+  let _ = cmd.Flags().BoolP("quiet", "q", false, "suppress all output")
+  let _ = cmd.Flags().Bool("no-colors", false, "disable ANSI color output")
+  let _ = cmd
+    .Flags()
+    .Bool("no-stored-options", false, "ignore .nib2cibconfig / nib2cib.conf")
+}
+
+// SharedFlags is the parsed value of every flag in add_shared_flags, read
+// back out of a command's flag set once cobra has finished parsing.
+pub struct SharedFlags {
+  pub default_theme: string,
+  pub themes: Slice<string>,
+  pub config: string,
+  pub frameworks: Slice<string>,
+  pub verbose: int,
+  pub quiet: bool,
+  pub no_colors: bool,
+  pub no_stored_options: bool,
+}
+
+pub fn read_shared_flags(cmd: Ref<cobra.Command>) -> SharedFlags {
+  SharedFlags {
+    default_theme: cmd.Flags().GetString("default-theme").unwrap_or(""),
+    themes: cmd.Flags().GetStringArray("theme").unwrap_or([]),
+    config: cmd.Flags().GetString("config").unwrap_or(""),
+    frameworks: cmd.Flags().GetStringArray("framework").unwrap_or([]),
+    verbose: cmd.Flags().GetCount("verbose").unwrap_or(0),
+    quiet: cmd.Flags().GetBool("quiet").unwrap_or(false),
+    no_colors: cmd.Flags().GetBool("no-colors").unwrap_or(false),
+    no_stored_options: cmd.Flags().GetBool("no-stored-options").unwrap_or(false),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// root and execute
+// ---------------------------------------------------------------------------
+
+// execute is the package's single entry point. main.lis calls this and
+// nothing else.
+pub fn execute() -> Result<(), error> {
+  let mut root = make_group(
+    "capp-nib2cib",
+    "Convert Cocoa XIB files to Cappuccino CIB files",
+  )
+  let convert_cmd = new_convert_cmd()
+  let watch_cmd = new_watch_cmd()
+  let version_cmd = new_version_cmd()
+  root.AddCommand(&convert_cmd)
+  root.AddCommand(&watch_cmd)
+  root.AddCommand(&version_cmd)
+  root.Execute()
+}

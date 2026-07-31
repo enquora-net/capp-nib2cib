@@ -92,9 +92,7 @@ fn cib_path_for(root: Ref<ProjectRoot>, xib_path: string) -> string {
 // be cast to a Go interface/function type such as filepath.WalkFunc (only a
 // named function can satisfy that conversion), and a named top-level
 // function has no local accumulator to capture.
-struct FoundXibs {
-  paths: Slice<string>,
-}
+struct FoundXibs { paths: Slice<string> }
 
 fn collect_xibs(dir: string, acc: Ref<FoundXibs>) -> Result<(), error> {
   // os.ReadDir returns Partial (Ok/Err/Both), not a plain Result: a
@@ -169,7 +167,12 @@ pub fn run_resolve_project_paths(ctx: Ref<PipelineContext>) -> Result<ResolvePro
   if targets.is_empty() {
     return Ok(
       ResolveProjectPathsResult {
-        diags: [diag_error(Nib2CibPhase.ResolveProjectPaths, "no .xib files found to convert")],
+        diags: [
+          diag_error(
+            Nib2CibPhase.ResolveProjectPaths,
+            "no .xib files found to convert",
+          ),
+        ],
         root,
         targets: [],
       },

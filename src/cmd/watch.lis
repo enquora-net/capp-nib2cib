@@ -1,0 +1,38 @@
+//**
+// cmd/watch.lis
+// capp-nib2cib
+//
+// Created by David Richardson on Thursday, July 30, 2026.
+// Copyright (c) 2026 David Richardson. All rights reserved.
+//
+// The watch command. Bare stub — no fs-watching logic yet, so it does not
+// call the convert pipeline.
+//
+// **
+import "go:github.com/spf13/cobra"
+
+fn run_watch(cmd: Ref<cobra.Command>, args: Slice<string>) {
+  let directory = if args.length() > 0 { args[0] } else { "." }
+  let flags = read_shared_flags(cmd)
+  cmd.Println("watch: not yet implemented")
+  cmd.Println(f"  directory: {directory}")
+  cmd.Println(f"  default_theme: {flags.default_theme}")
+  cmd.Println(f"  themes: {flags.themes}")
+  cmd.Println(f"  config: {flags.config}")
+  cmd.Println(f"  frameworks: {flags.frameworks}")
+  cmd.Println(f"  verbose: {flags.verbose}")
+  cmd.Println(f"  quiet: {flags.quiet}")
+  cmd.Println(f"  no_colors: {flags.no_colors}")
+  cmd.Println(f"  no_stored_options: {flags.no_stored_options}")
+}
+
+fn new_watch_cmd() -> cobra.Command {
+  let mut cmd = make_command_with_max_args(
+    "watch [DIRECTORY]",
+    "Watch a directory and convert XIBs on change",
+    run_watch,
+    1,
+  )
+  add_shared_flags(&cmd)
+  cmd
+}

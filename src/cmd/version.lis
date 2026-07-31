@@ -1,0 +1,19 @@
+//**
+// cmd/version.lis
+// capp-nib2cib
+//
+// Created by David Richardson on Thursday, July 30, 2026.
+// Copyright (c) 2026 David Richardson. All rights reserved.
+//
+// The version command.
+//
+// **
+import "go:github.com/spf13/cobra"
+
+fn run_version(cmd: Ref<cobra.Command>, _args: Slice<string>) {
+  cmd.Println(f"capp-nib2cib {VERSION}")
+}
+
+fn new_version_cmd() -> cobra.Command {
+  make_command("version", "Print version information", run_version)
+}

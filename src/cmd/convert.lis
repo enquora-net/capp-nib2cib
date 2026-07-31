@@ -1,0 +1,52 @@
+//**
+// cmd/convert.lis
+// capp-nib2cib
+//
+// Created by David Richardson on Thursday, July 30, 2026.
+// Copyright (c) 2026 David Richardson. All rights reserved.
+//
+// The convert command.
+//
+// **
+import "go:github.com/spf13/cobra"
+import "go:os"
+
+import "convert"
+
+fn run_convert(cmd: Ref<cobra.Command>, args: Slice<string>) {
+  // An empty input means "the whole project tree" — resolved by
+  // convert.ResolveProjectPaths, not decided here. See
+  // convert/phase01_resolve_project_paths.lis.
+  let input = if args.length() > 0 { args[0] } else { "" }
+  let flags = read_shared_flags(cmd)
+  let cfg = convert.ConvertConfig {
+    input,
+    default_theme: flags.default_theme,
+    themes: flags.themes,
+    config: flags.config,
+    frameworks: flags.frameworks,
+  }
+  match convert.convert(cfg) {
+    Ok(result) => {
+      cmd.Println(result.message)
+      if !result.ok { os.Exit(1) }
+    },
+    Err(e) => {
+      cmd.Println(f"convert error: {e}")
+      os.Exit(1)
+    },
+  }
+}
+
+fn new_convert_cmd() -> cobra.Command {
+  // Output is never a CLI argument: every CIB lands in ./Resources under
+  // the project root, always. See convert/phase01_resolve_project_paths.lis.
+  let mut cmd = make_command_with_max_args(
+    "convert [INPUT]",
+    "Convert one XIB, a directory of XIBs, or the whole project to CIB",
+    run_convert,
+    1,
+  )
+  add_shared_flags(&cmd)
+  cmd
+}
