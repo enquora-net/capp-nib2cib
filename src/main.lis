@@ -1,0 +1,275 @@
+//**
+// main.lis
+// capp-nib2cib
+//
+// Created by David Richardson on Thursday, July 30, 2026.
+// Copyright (c) 2026 David Richardson. All rights reserved.
+//
+// CLI entry point. Command surface only — convert/watch bodies are bare
+// stubs pending pipeline implementation.
+//
+// Command surface:
+//   capp-nib2cib convert [INPUT [OUTPUT]]
+//   capp-nib2cib watch [DIRECTORY]
+//   capp-nib2cib version
+//   capp-nib2cib completion               (cobra built-in)
+//
+// VERSION is a generated constant in src/version_generated.lis, written by
+// `make build`/`make build-all` before compilation. Local builds report "dev".
+//
+// **
+import "go:fmt"
+import "go:github.com/spf13/cobra"
+
+// ---------------------------------------------------------------------------
+// Shared cobra scaffolding
+// ---------------------------------------------------------------------------
+
+type RunFn = fn(Ref<cobra.Command>, Slice<string>) -> ()
+
+fn no_args(cmd: Ref<cobra.Command>, args: Slice<string>) -> Result<(), error> {
+  cobra.NoArgs(cmd, args)
+}
+
+fn noop_run(_cmd: Ref<cobra.Command>, _args: Slice<string>) {}
+
+fn completion_options() -> cobra.CompletionOptions {
+  cobra.CompletionOptions {
+    DisableDefaultCmd: false,
+    DisableNoDescFlag: false,
+    DisableDescriptions: false,
+    HiddenDefaultCmd: false,
+    DefaultShellCompDirective: Some(cobra.ShellCompDirectiveDefault),
+    ..,
+  }
+}
+
+fn fparse_err_whitelist() -> cobra.FParseErrWhitelist {
+  cobra.FParseErrWhitelist { UnknownFlags: false }
+}
+
+fn make_command(use: string, short: string, run: RunFn) -> cobra.Command {
+  cobra.Command {
+    Use: use,
+    Short: short,
+    Args: Some(no_args as cobra.PositionalArgs),
+    Annotations: Map.new<string, string>(),
+    PersistentPreRun: Some(noop_run as RunFn),
+    PersistentPreRunE: None,
+    PreRun: Some(noop_run as RunFn),
+    PreRunE: None,
+    Run: Some(run),
+    RunE: None,
+    PostRun: Some(noop_run as RunFn),
+    PostRunE: None,
+    PersistentPostRun: Some(noop_run as RunFn),
+    PersistentPostRunE: None,
+    ValidArgsFunction: None,
+    FParseErrWhitelist: fparse_err_whitelist(),
+    CompletionOptions: completion_options(),
+    SilenceErrors: true,
+    SilenceUsage: true,
+    SuggestionsMinimumDistance: 2,
+    ..,
+  }
+}
+
+// make_command_with_max_args builds a command whose positional args are
+// capped at `max` (0 disables all positional args via cobra.NoArgs).
+fn make_command_with_max_args(use: string, short: string, run: RunFn, max: int) -> cobra.Command {
+  let args_check = if max == 0 {
+    no_args as cobra.PositionalArgs
+  } else {
+    cobra.MaximumNArgs(max)
+  }
+  cobra.Command {
+    Use: use,
+    Short: short,
+    Args: Some(args_check),
+    Annotations: Map.new<string, string>(),
+    PersistentPreRun: Some(noop_run as RunFn),
+    PersistentPreRunE: None,
+    PreRun: Some(noop_run as RunFn),
+    PreRunE: None,
+    Run: Some(run),
+    RunE: None,
+    PostRun: Some(noop_run as RunFn),
+    PostRunE: None,
+    PersistentPostRun: Some(noop_run as RunFn),
+    PersistentPostRunE: None,
+    ValidArgsFunction: None,
+    FParseErrWhitelist: fparse_err_whitelist(),
+    CompletionOptions: completion_options(),
+    SilenceErrors: true,
+    SilenceUsage: true,
+    SuggestionsMinimumDistance: 2,
+    ..,
+  }
+}
+
+fn make_group(use: string, short: string) -> cobra.Command {
+  cobra.Command {
+    Use: use,
+    Short: short,
+    Args: Some(no_args as cobra.PositionalArgs),
+    Annotations: Map.new<string, string>(),
+    PersistentPreRun: Some(noop_run as RunFn),
+    PersistentPreRunE: None,
+    PreRun: None,
+    PreRunE: None,
+    Run: None,
+    RunE: None,
+    PostRun: None,
+    PostRunE: None,
+    PersistentPostRun: Some(noop_run as RunFn),
+    PersistentPostRunE: None,
+    ValidArgsFunction: None,
+    FParseErrWhitelist: fparse_err_whitelist(),
+    CompletionOptions: completion_options(),
+    SilenceErrors: true,
+    SilenceUsage: true,
+    SuggestionsMinimumDistance: 2,
+    ..,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shared flags — convert and watch both take the full set
+// ---------------------------------------------------------------------------
+
+fn add_shared_flags(cmd: Ref<cobra.Command>) {
+  let _ = cmd.Flags().String("default-theme", "", "override default theme name")
+  let _ = cmd
+    .Flags()
+    .StringArrayP("theme", "t", [], "additional theme (repeatable)")
+  let _ = cmd
+    .Flags()
+    .String("config", "", "path to Info.plist for font/size override")
+  let _ = cmd
+    .Flags()
+    .StringArrayP("framework", "F", [], "framework to load (repeatable)")
+  let _ = cmd.Flags().CountP("verbose", "v", "increase verbosity (repeatable)")
+  let _ = cmd.Flags().BoolP("quiet", "q", false, "suppress all output")
+  let _ = cmd.Flags().Bool("no-colors", false, "disable ANSI color output")
+  let _ = cmd
+    .Flags()
+    .Bool("no-stored-options", false, "ignore .nib2cibconfig / nib2cib.conf")
+}
+
+// SharedFlags is the parsed value of every flag in add_shared_flags, read
+// back out of a command's flag set once cobra has finished parsing.
+struct SharedFlags {
+  default_theme: string,
+  themes: Slice<string>,
+  config: string,
+  frameworks: Slice<string>,
+  verbose: int,
+  quiet: bool,
+  no_colors: bool,
+  no_stored_options: bool,
+}
+
+fn read_shared_flags(cmd: Ref<cobra.Command>) -> SharedFlags {
+  SharedFlags {
+    default_theme: cmd.Flags().GetString("default-theme").unwrap_or(""),
+    themes: cmd.Flags().GetStringArray("theme").unwrap_or([]),
+    config: cmd.Flags().GetString("config").unwrap_or(""),
+    frameworks: cmd.Flags().GetStringArray("framework").unwrap_or([]),
+    verbose: cmd.Flags().GetCount("verbose").unwrap_or(0),
+    quiet: cmd.Flags().GetBool("quiet").unwrap_or(false),
+    no_colors: cmd.Flags().GetBool("no-colors").unwrap_or(false),
+    no_stored_options: cmd.Flags().GetBool("no-stored-options").unwrap_or(false),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// convert command
+// ---------------------------------------------------------------------------
+
+fn run_convert(cmd: Ref<cobra.Command>, args: Slice<string>) {
+  let input = if args.length() > 0 { args[0] } else { "<stdin>" }
+  let output = if args.length() > 1 { args[1] } else { "<stdout>" }
+  let flags = read_shared_flags(cmd)
+  cmd.Println("convert: not yet implemented")
+  cmd.Println(f"  input:  {input}")
+  cmd.Println(f"  output: {output}")
+  cmd.Println(f"  default_theme: {flags.default_theme}")
+  cmd.Println(f"  themes: {flags.themes}")
+  cmd.Println(f"  config: {flags.config}")
+  cmd.Println(f"  frameworks: {flags.frameworks}")
+  cmd.Println(f"  verbose: {flags.verbose}")
+  cmd.Println(f"  quiet: {flags.quiet}")
+  cmd.Println(f"  no_colors: {flags.no_colors}")
+  cmd.Println(f"  no_stored_options: {flags.no_stored_options}")
+}
+
+fn new_convert_cmd() -> cobra.Command {
+  let mut cmd = make_command_with_max_args(
+    "convert [INPUT [OUTPUT]]",
+    "Convert a single XIB to CIB",
+    run_convert,
+    2,
+  )
+  add_shared_flags(&cmd)
+  cmd
+}
+
+// ---------------------------------------------------------------------------
+// watch command
+// ---------------------------------------------------------------------------
+
+fn run_watch(cmd: Ref<cobra.Command>, args: Slice<string>) {
+  let directory = if args.length() > 0 { args[0] } else { "." }
+  let flags = read_shared_flags(cmd)
+  cmd.Println("watch: not yet implemented")
+  cmd.Println(f"  directory: {directory}")
+  cmd.Println(f"  default_theme: {flags.default_theme}")
+  cmd.Println(f"  themes: {flags.themes}")
+  cmd.Println(f"  config: {flags.config}")
+  cmd.Println(f"  frameworks: {flags.frameworks}")
+  cmd.Println(f"  verbose: {flags.verbose}")
+  cmd.Println(f"  quiet: {flags.quiet}")
+  cmd.Println(f"  no_colors: {flags.no_colors}")
+  cmd.Println(f"  no_stored_options: {flags.no_stored_options}")
+}
+
+fn new_watch_cmd() -> cobra.Command {
+  let mut cmd = make_command_with_max_args(
+    "watch [DIRECTORY]",
+    "Watch a directory and convert XIBs on change",
+    run_watch,
+    1,
+  )
+  add_shared_flags(&cmd)
+  cmd
+}
+
+// ---------------------------------------------------------------------------
+// version command
+// ---------------------------------------------------------------------------
+
+fn run_version(cmd: Ref<cobra.Command>, _args: Slice<string>) {
+  cmd.Println(f"capp-nib2cib {VERSION}")
+}
+
+fn new_version_cmd() -> cobra.Command {
+  make_command("version", "Print version information", run_version)
+}
+
+// ---------------------------------------------------------------------------
+// root and main
+// ---------------------------------------------------------------------------
+
+fn main() {
+  let mut root = make_group(
+    "capp-nib2cib",
+    "Convert Cocoa XIB files to Cappuccino CIB files",
+  )
+  let convert_cmd = new_convert_cmd()
+  let watch_cmd = new_watch_cmd()
+  let version_cmd = new_version_cmd()
+  root.AddCommand(&convert_cmd)
+  root.AddCommand(&watch_cmd)
+  root.AddCommand(&version_cmd)
+  if let Err(e) = root.Execute() { fmt.Println(f"error: {e}") }
+}

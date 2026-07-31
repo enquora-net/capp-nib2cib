@@ -1,0 +1,8 @@
+//**
+// version_generated.lis
+// capp-nib2cib
+//
+// Generated — do not edit by hand.
+// **
+
+pub const VERSION: string = "dev"
