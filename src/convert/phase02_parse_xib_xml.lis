@@ -1,0 +1,26 @@
+//**
+// convert/phase02_parse_xib_xml.lis
+// capp-nib2cib
+//
+// Created by David Richardson on Thursday, July 30, 2026.
+// Copyright (c) 2026 David Richardson. All rights reserved.
+//
+// Phase 2: ParseXibXml
+//
+// Stub. Will parse the XIB XML tree at each target's xib_path (phase 1's
+// resolved list, in ctx.paths) into a typed CST, with zero semantic
+// knowledge of AppKit (see README.md — blind structural transpiler, not the
+// legacy semantic interpreter).
+//
+// **
+import "go:fmt"
+
+pub struct ParseXibXmlResult {
+  pub diags: Slice<Diagnostic>,
+}
+
+pub fn run_parse_xib_xml(ctx: Ref<PipelineContext>) -> Result<ParseXibXmlResult, error> {
+  let n = ctx.paths.map_or(0, |r| r.targets.length())
+  fmt.Println(f"○  parse-xib-xml: stub — {n} target(s)")
+  Ok(ParseXibXmlResult { diags: [] })
+}

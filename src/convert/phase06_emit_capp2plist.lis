@@ -1,14 +1,14 @@
 //**
-// convert/phase05_emit_capp2plist.lis
+// convert/phase06_emit_capp2plist.lis
 // capp-nib2cib
 //
 // Created by David Richardson on Thursday, July 30, 2026.
 // Copyright (c) 2026 David Richardson. All rights reserved.
 //
-// Phase 5: EmitCapp2Plist
+// Phase 6: EmitCapp2Plist
 //
-// Stub. Will emit the resolved object table as CAPP2PLIST text to
-// ctx.config.output.
+// Stub. Will emit the resolved object table as CAPP2PLIST text, one file per
+// target, to the cib_path computed for it in phase 1.
 //
 // **
 import "go:fmt"
@@ -18,6 +18,7 @@ pub struct EmitCapp2PlistResult {
 }
 
 pub fn run_emit_capp2plist(ctx: Ref<PipelineContext>) -> Result<EmitCapp2PlistResult, error> {
-  fmt.Println(f"○  emit-capp2plist: stub — {ctx.config.output}")
+  let n = ctx.paths.map_or(0, |r| r.targets.length())
+  fmt.Println(f"○  emit-capp2plist: stub — {n} target(s)")
   Ok(EmitCapp2PlistResult { diags: [] })
 }

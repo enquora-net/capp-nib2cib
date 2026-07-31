@@ -1,14 +1,14 @@
 //**
-// convert/phase04_resolve_uid_references.lis
+// convert/phase05_resolve_uid_references.lis
 // capp-nib2cib
 //
 // Created by David Richardson on Thursday, July 30, 2026.
 // Copyright (c) 2026 David Richardson. All rights reserved.
 //
-// Phase 4: ResolveUidReferences
+// Phase 5: ResolveUidReferences
 //
 // Stub. Will resolve XIB string object IDs to integer CP$UID references
-// against the interned string pool from phase 3.
+// against the interned string pool from phase 4.
 //
 // **
 import "go:fmt"

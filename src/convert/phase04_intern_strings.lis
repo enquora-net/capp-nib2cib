@@ -1,14 +1,15 @@
 //**
-// convert/phase03_intern_strings.lis
+// convert/phase04_intern_strings.lis
 // capp-nib2cib
 //
 // Created by David Richardson on Thursday, July 30, 2026.
 // Copyright (c) 2026 David Richardson. All rights reserved.
 //
-// Phase 3: InternStrings
+// Phase 4: InternStrings
 //
 // Stub. Will intern the flattened object table's string values into a
-// deduplicated string pool ahead of UID resolution.
+// deduplicated string pool (from phase 3's flattened table) ahead of UID
+// resolution.
 //
 // **
 import "go:fmt"

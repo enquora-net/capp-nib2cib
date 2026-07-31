@@ -9,7 +9,7 @@
 // stubs pending pipeline implementation.
 //
 // Command surface:
-//   capp-nib2cib convert [INPUT [OUTPUT]]
+//   capp-nib2cib convert [INPUT]
 //   capp-nib2cib watch [DIRECTORY]
 //   capp-nib2cib version
 //   capp-nib2cib completion               (cobra built-in)
@@ -190,12 +190,13 @@ fn read_shared_flags(cmd: Ref<cobra.Command>) -> SharedFlags {
 // ---------------------------------------------------------------------------
 
 fn run_convert(cmd: Ref<cobra.Command>, args: Slice<string>) {
-  let input = if args.length() > 0 { args[0] } else { "<stdin>" }
-  let output = if args.length() > 1 { args[1] } else { "<stdout>" }
+  // An empty input means "the whole project tree" — resolved by
+  // convert.ResolveProjectPaths, not decided here. See
+  // convert/phase01_resolve_project_paths.lis.
+  let input = if args.length() > 0 { args[0] } else { "" }
   let flags = read_shared_flags(cmd)
   let cfg = convert.ConvertConfig {
     input,
-    output,
     default_theme: flags.default_theme,
     themes: flags.themes,
     config: flags.config,
@@ -214,11 +215,13 @@ fn run_convert(cmd: Ref<cobra.Command>, args: Slice<string>) {
 }
 
 fn new_convert_cmd() -> cobra.Command {
+  // Output is never a CLI argument: every CIB lands in ./Resources under
+  // the project root, always. See convert/phase01_resolve_project_paths.lis.
   let mut cmd = make_command_with_max_args(
-    "convert [INPUT [OUTPUT]]",
-    "Convert a single XIB to CIB",
+    "convert [INPUT]",
+    "Convert one XIB, a directory of XIBs, or the whole project to CIB",
     run_convert,
-    2,
+    1,
   )
   add_shared_flags(&cmd)
   cmd

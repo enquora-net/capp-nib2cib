@@ -1,13 +1,13 @@
 //**
-// convert/phase02_flatten_object_graph.lis
+// convert/phase03_flatten_object_graph.lis
 // capp-nib2cib
 //
 // Created by David Richardson on Thursday, July 30, 2026.
 // Copyright (c) 2026 David Richardson. All rights reserved.
 //
-// Phase 2: FlattenObjectGraph
+// Phase 3: FlattenObjectGraph
 //
-// Stub. Will walk the parsed XIB tree from phase 1 and flatten it into a
+// Stub. Will walk the parsed XIB tree from phase 2 and flatten it into a
 // linear object table, mirroring the XIB structure one-to-one.
 //
 // **

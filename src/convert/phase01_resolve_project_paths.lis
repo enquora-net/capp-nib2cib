@@ -1,0 +1,179 @@
+//**
+// convert/phase01_resolve_project_paths.lis
+// capp-nib2cib
+//
+// Created by David Richardson on Thursday, July 30, 2026.
+// Copyright (c) 2026 David Richardson. All rights reserved.
+//
+// Phase 1: ResolveProjectPaths
+//
+// Finds the project root (walking upward from the current working directory,
+// so the tool runs correctly from any point in the source tree — mirroring
+// capp-build's find_project_root/is_project_root in build/context.lis,
+// duplicated here rather than shared: capp-ast is being wound down as a
+// stopgap and capp-build is currently paused, so neither is a sound place to
+// extract shared code to right now).
+//
+// Also expands ctx.config.input into the concrete set of conversion targets:
+//   input omitted     -> every .xib under the project root
+//   input is a directory -> every .xib under that directory
+//   input is a single file -> that file alone
+//
+// Every target's CIB output path is {project_root}/Resources/{stem}.cib,
+// regardless of where under the tree the source .xib was found. CIB
+// placement is flat under Resources; it is not a mirror of the source tree.
+//
+// **
+import "go:errors"
+import "go:os"
+import "go:path/filepath"
+import "go:strings"
+
+// ---------------------------------------------------------------------------
+// Project root discovery
+// ---------------------------------------------------------------------------
+
+// ProjectRoot carries only the validated path. capp-nib2cib has no notion of
+// project kind (Application/Framework/Theme) — that distinction belongs to
+// capp-build's phase 1, which validates a project is buildable. This phase
+// only needs to know where the root is.
+pub struct ProjectRoot {
+  pub path: string,
+}
+
+// is_project_root returns true when dir contains a Cappuccino project root
+// sentinel. Same sentinels as capp-build: Frameworks/Foundation (Application
+// root) or Info.plist (Framework/Theme root). os.Stat is used throughout
+// (not os.Lstat) so a symlinked Frameworks/Foundation is recognised when its
+// target is an existing directory.
+fn is_project_root(dir: string) -> bool {
+  let fwk = filepath.Join(dir, "Frameworks", "Foundation")
+  if os.Stat(fwk).map_or(false, |info| info.IsDir()) { return true }
+  os.Stat(filepath.Join(dir, "Info.plist")).is_ok()
+}
+
+// Walks upward from start until a project root sentinel is found. Returns
+// Err if no qualifying ancestor exists before the filesystem root.
+fn find_project_root(start: string) -> Result<ProjectRoot, error> {
+  let abs = filepath.Abs(start)?
+  let mut dir = abs
+  loop {
+    if is_project_root(dir) { return Ok(ProjectRoot { path: dir }) }
+    let parent = filepath.Dir(dir)
+    if parent == dir {
+      return Err(errors.New(
+        "no Cappuccino project root found: no Frameworks/Foundation or Info.plist in any ancestor directory",
+      ))
+    }
+    dir = parent
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Target expansion
+// ---------------------------------------------------------------------------
+
+// ConvertTarget is one resolved (source, destination) pair. cib_path is
+// always {project_root}/Resources/{stem(xib_path)}.cib.
+pub struct ConvertTarget {
+  pub xib_path: string,
+  pub cib_path: string,
+}
+
+fn cib_path_for(root: Ref<ProjectRoot>, xib_path: string) -> string {
+  let base = filepath.Base(xib_path)
+  let stem = strings.TrimSuffix(base, filepath.Ext(base))
+  filepath.Join(root.path, "Resources", f"{stem}.cib")
+}
+
+// FoundXibs is a plain accumulator. find_xibs_under recurses by mutating a
+// field through a Ref parameter — the same pattern pipeline.lis uses for
+// ctx.parsed = ... — rather than via filepath.Walk: a Lisette closure cannot
+// be cast to a Go interface/function type such as filepath.WalkFunc (only a
+// named function can satisfy that conversion), and a named top-level
+// function has no local accumulator to capture.
+struct FoundXibs {
+  paths: Slice<string>,
+}
+
+fn collect_xibs(dir: string, acc: Ref<FoundXibs>) -> Result<(), error> {
+  // os.ReadDir returns Partial (Ok/Err/Both), not a plain Result: a
+  // directory can be partially readable, yielding some entries alongside a
+  // non-nil error. Proceed with whatever entries came back in the Both
+  // case — a partial listing is still useful input to a conversion tool —
+  // and only halt on a bare Err.
+  let entries = match os.ReadDir(dir) {
+    Ok(list) => list,
+    Both(list, _err) => list,
+    Err(e) => return Err(e),
+  }
+  for entry in entries {
+    let full = filepath.Join(dir, entry.Name())
+    if entry.IsDir() {
+      collect_xibs(full, acc)?
+    } else if strings.HasSuffix(entry.Name(), ".xib") {
+      acc.paths = acc.paths.append(full)
+    }
+  }
+  Ok(())
+}
+
+// find_xibs_under walks dir recursively and returns every file with a .xib
+// extension. Not exported: only the expansion entry point below needs it.
+fn find_xibs_under(dir: string) -> Result<Slice<string>, error> {
+  let mut acc = FoundXibs { paths: [] }
+  collect_xibs(dir, &acc)?
+  Ok(acc.paths)
+}
+
+// expand_input classifies ctx.config.input and returns every ConvertTarget
+// it names. An empty input means "the whole project tree."
+fn expand_input(input: string, root: Ref<ProjectRoot>) -> Result<Slice<ConvertTarget>, error> {
+  let xibs = if input == "" {
+    find_xibs_under(root.path)?
+  } else {
+    let info = os.Stat(input)?
+    if info.IsDir() {
+      find_xibs_under(input)?
+    } else {
+      if !strings.HasSuffix(input, ".xib") {
+        return Err(errors.New(f"not a .xib file: {input}"))
+      }
+      [input]
+    }
+  }
+
+  let mut targets: Slice<ConvertTarget> = []
+  for xib in xibs {
+    targets = targets.append(
+      ConvertTarget { xib_path: xib, cib_path: cib_path_for(root, xib) },
+    )
+  }
+  Ok(targets)
+}
+
+// ---------------------------------------------------------------------------
+// Phase entry point
+// ---------------------------------------------------------------------------
+
+pub struct ResolveProjectPathsResult {
+  pub diags: Slice<Diagnostic>,
+  pub root: ProjectRoot,
+  pub targets: Slice<ConvertTarget>,
+}
+
+pub fn run_resolve_project_paths(ctx: Ref<PipelineContext>) -> Result<ResolveProjectPathsResult, error> {
+  let cwd = os.Getwd()?
+  let root = find_project_root(cwd)?
+  let targets = expand_input(ctx.config.input, &root)?
+  if targets.is_empty() {
+    return Ok(
+      ResolveProjectPathsResult {
+        diags: [diag_error(Nib2CibPhase.ResolveProjectPaths, "no .xib files found to convert")],
+        root,
+        targets: [],
+      },
+    )
+  }
+  Ok(ResolveProjectPathsResult { diags: [], root, targets })
+}
