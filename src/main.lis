@@ -20,6 +20,9 @@
 // **
 import "go:fmt"
 import "go:github.com/spf13/cobra"
+import "go:os"
+
+import "convert"
 
 // ---------------------------------------------------------------------------
 // Shared cobra scaffolding
@@ -190,17 +193,24 @@ fn run_convert(cmd: Ref<cobra.Command>, args: Slice<string>) {
   let input = if args.length() > 0 { args[0] } else { "<stdin>" }
   let output = if args.length() > 1 { args[1] } else { "<stdout>" }
   let flags = read_shared_flags(cmd)
-  cmd.Println("convert: not yet implemented")
-  cmd.Println(f"  input:  {input}")
-  cmd.Println(f"  output: {output}")
-  cmd.Println(f"  default_theme: {flags.default_theme}")
-  cmd.Println(f"  themes: {flags.themes}")
-  cmd.Println(f"  config: {flags.config}")
-  cmd.Println(f"  frameworks: {flags.frameworks}")
-  cmd.Println(f"  verbose: {flags.verbose}")
-  cmd.Println(f"  quiet: {flags.quiet}")
-  cmd.Println(f"  no_colors: {flags.no_colors}")
-  cmd.Println(f"  no_stored_options: {flags.no_stored_options}")
+  let cfg = convert.ConvertConfig {
+    input,
+    output,
+    default_theme: flags.default_theme,
+    themes: flags.themes,
+    config: flags.config,
+    frameworks: flags.frameworks,
+  }
+  match convert.convert(cfg) {
+    Ok(result) => {
+      cmd.Println(result.message)
+      if !result.ok { os.Exit(1) }
+    },
+    Err(e) => {
+      cmd.Println(f"convert error: {e}")
+      os.Exit(1)
+    },
+  }
 }
 
 fn new_convert_cmd() -> cobra.Command {

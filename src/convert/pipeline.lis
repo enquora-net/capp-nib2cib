@@ -1,0 +1,208 @@
+//**
+// convert/pipeline.lis
+// capp-nib2cib
+//
+// Created by David Richardson on Thursday, July 30, 2026.
+// Copyright (c) 2026 David Richardson. All rights reserved.
+//
+// Phase pipeline declaration and orchestration.
+//
+// Diagnostic infrastructure lives in diagnostics.lis.
+// Phase implementations live in phase01_parse_xib_xml.lis through
+// phase05_emit_capp2plist.lis. All five are bare stubs pending the XIB XML
+// parser, object graph flattener, string interner, UID resolver, and
+// CAPP2PLIST emitter.
+//
+// **
+import "go:strings"
+
+// ---------------------------------------------------------------------------
+// Nib2CibPhase
+// ---------------------------------------------------------------------------
+
+// The compiler confirms that each variant has an implementation and that it
+// runs in the correct order via the execution machinery below. Declaration
+// order is the authoritative execution order; #[iterate] synthesises
+// variants() from it.
+#[iterate]
+pub enum Nib2CibPhase {
+  ParseXibXml,
+  FlattenObjectGraph,
+  InternStrings,
+  ResolveUidReferences,
+  EmitCapp2Plist,
+}
+
+// Adding a variant to Nib2CibPhase without a corresponding arm here is a
+// compile error — the binding between declaration and execution.
+impl Nib2CibPhase {
+  fn run(self, ctx: Ref<PipelineContext>) -> Result<(), error> {
+    match self {
+      ParseXibXml => {
+        ctx.parsed = Some(run_parse_xib_xml(ctx)?)
+        Ok(())
+      },
+      FlattenObjectGraph => {
+        ctx.flattened = Some(run_flatten_object_graph(ctx)?)
+        Ok(())
+      },
+      InternStrings => {
+        ctx.interned = Some(run_intern_strings(ctx)?)
+        Ok(())
+      },
+      ResolveUidReferences => {
+        ctx.resolved = Some(run_resolve_uid_references(ctx)?)
+        Ok(())
+      },
+      EmitCapp2Plist => {
+        ctx.emitted = Some(run_emit_capp2plist(ctx)?)
+        Ok(())
+      },
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ConvertConfig / ConvertResult
+// ---------------------------------------------------------------------------
+
+pub struct ConvertConfig {
+  pub input: string,
+  pub output: string,
+  pub default_theme: string,
+  pub themes: Slice<string>,
+  pub config: string,
+  pub frameworks: Slice<string>,
+}
+
+pub struct ConvertResult {
+  pub ok: bool,
+  pub message: string,
+  pub diags: Slice<Diagnostic>,
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline context
+// ---------------------------------------------------------------------------
+
+// Each phase output field is Option-typed. None indicates the phase has not
+// yet executed; Some indicates it completed and its result is available to
+// downstream phases. No phase begins until all predecessor fields are Some.
+pub struct PipelineContext {
+  pub config: ConvertConfig,
+  pub parsed: Option<ParseXibXmlResult>,
+  pub flattened: Option<FlattenObjectGraphResult>,
+  pub interned: Option<InternStringsResult>,
+  pub resolved: Option<ResolveUidReferencesResult>,
+  pub emitted: Option<EmitCapp2PlistResult>,
+}
+
+// phase_diags returns the diagnostics produced by a phase, read from the
+// ctx field that phase populates. Exhaustive over Nib2CibPhase: adding a
+// phase without an arm here is a compile error. A None field means the
+// phase did not run (an earlier phase halted), yielding no diagnostics.
+fn phase_diags(phase: Nib2CibPhase, ctx: Ref<PipelineContext>) -> Slice<Diagnostic> {
+  match phase {
+    ParseXibXml => ctx.parsed.map_or([], |r| r.diags),
+    FlattenObjectGraph => ctx.flattened.map_or([], |r| r.diags),
+    InternStrings => ctx.interned.map_or([], |r| r.diags),
+    ResolveUidReferences => ctx.resolved.map_or([], |r| r.diags),
+    EmitCapp2Plist => ctx.emitted.map_or([], |r| r.diags),
+  }
+}
+
+fn has_error(diags: Slice<Diagnostic>) -> bool {
+  for d in diags {
+    if d.level == DiagLevel.Error { return true }
+  }
+  false
+}
+
+fn error_count(diags: Slice<Diagnostic>) -> int {
+  let mut n = 0
+  for d in diags {
+    if d.level == DiagLevel.Error { n += 1 }
+  }
+  n
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline orchestration
+// ---------------------------------------------------------------------------
+
+// A phase returning Err halts the pipeline; Warning-level diagnostics do not.
+//
+// The ConvertConfig literal is constructed inline as part of the
+// PipelineContext literal rather than bound to a name first: ctx is a mut
+// binding, and Lisette's aliasing protection (extended to collection
+// wrappers) flags any named sibling binding whose Slice fields could be
+// implicitly mutated through ctx. An inline literal has no such sibling.
+pub fn convert(cfg: ConvertConfig) -> Result<ConvertResult, error> {
+  let mut ctx = PipelineContext {
+    config: ConvertConfig {
+      input: cfg.input,
+      output: cfg.output,
+      default_theme: cfg.default_theme,
+      themes: cfg.themes.clone(),
+      config: cfg.config,
+      frameworks: cfg.frameworks.clone(),
+    },
+    ..,
+  }
+
+  for phase in Nib2CibPhase.variants() {
+    phase.run(&ctx)?
+    // Gate on diagnostics: a phase that reports an Error means the input is
+    // unconvertible from this point. Halt before dependent phases run on
+    // its incomplete result. The phase has already printed its own stub
+    // notice; here we stop and report.
+    let diags = phase_diags(phase, &ctx)
+    if has_error(diags) {
+      let n = error_count(diags)
+      return Ok(
+        ConvertResult {
+          ok: false,
+          message: halt_message(phase, n, diags),
+          diags,
+        },
+      )
+    }
+  }
+
+  Ok(
+    ConvertResult {
+      ok: true,
+      message: f"convert complete: {ctx.config.input} -> {ctx.config.output}",
+      ..,
+    },
+  )
+}
+
+// halt_message renders a phase halt with concrete Error diagnostics.
+fn halt_message(phase: Nib2CibPhase, error_total: int, diags: Slice<Diagnostic>) -> string {
+  let mut lines: Slice<string> = [
+    f"convert halted: {error_total} error(s) in {phase_name(phase)}",
+  ]
+  let mut displayed = 0
+  for d in diags {
+    if d.level == DiagLevel.Error && displayed < 5 {
+      lines = lines.append(f"  {d.message}")
+      displayed += 1
+    }
+  }
+  if error_total > displayed {
+    lines = lines.append(f"  ... {error_total - displayed} more error(s)")
+  }
+  strings.Join(lines, "\n")
+}
+
+// phase_name renders a phase for halt messages.
+fn phase_name(phase: Nib2CibPhase) -> string {
+  match phase {
+    ParseXibXml => "parse XIB XML",
+    FlattenObjectGraph => "flatten object graph",
+    InternStrings => "intern strings",
+    ResolveUidReferences => "resolve UID references",
+    EmitCapp2Plist => "emit CAPP2PLIST",
+  }
+}

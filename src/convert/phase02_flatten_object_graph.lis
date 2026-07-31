@@ -1,0 +1,23 @@
+//**
+// convert/phase02_flatten_object_graph.lis
+// capp-nib2cib
+//
+// Created by David Richardson on Thursday, July 30, 2026.
+// Copyright (c) 2026 David Richardson. All rights reserved.
+//
+// Phase 2: FlattenObjectGraph
+//
+// Stub. Will walk the parsed XIB tree from phase 1 and flatten it into a
+// linear object table, mirroring the XIB structure one-to-one.
+//
+// **
+import "go:fmt"
+
+pub struct FlattenObjectGraphResult {
+  pub diags: Slice<Diagnostic>,
+}
+
+pub fn run_flatten_object_graph(_ctx: Ref<PipelineContext>) -> Result<FlattenObjectGraphResult, error> {
+  fmt.Println("○  flatten-object-graph: stub")
+  Ok(FlattenObjectGraphResult { diags: [] })
+}

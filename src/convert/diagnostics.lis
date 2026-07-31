@@ -1,0 +1,43 @@
+//**
+// convert/diagnostics.lis
+// capp-nib2cib
+//
+// Created by David Richardson on Thursday, July 30, 2026.
+// Copyright (c) 2026 David Richardson. All rights reserved.
+//
+// Diagnostic infrastructure shared across all pipeline phases.
+//
+// Phases accumulate Diagnostics rather than aborting on the first failure,
+// so the full set of defects is surfaced in a single conversion pass.
+//
+// File/line/col attribution (diag_error_at / diag_warn_at) is deferred until
+// phase 1 has an actual XML parser producing source positions to attribute.
+//
+// **
+
+pub enum DiagLevel {
+  Info,
+  Warning,
+  Error,
+}
+
+pub struct Diagnostic {
+  pub phase: Nib2CibPhase,
+  pub level: DiagLevel,
+  pub message: string,
+  pub file: Option<string>,
+  pub line: Option<int>, // 1-based; None when no source position is available
+  pub col: Option<int>, // 1-based; None when no source position is available
+}
+
+pub fn diag_info(phase: Nib2CibPhase, message: string) -> Diagnostic {
+  Diagnostic { phase, level: DiagLevel.Info, message, .. }
+}
+
+pub fn diag_warn(phase: Nib2CibPhase, message: string) -> Diagnostic {
+  Diagnostic { phase, level: DiagLevel.Warning, message, .. }
+}
+
+pub fn diag_error(phase: Nib2CibPhase, message: string) -> Diagnostic {
+  Diagnostic { phase, level: DiagLevel.Error, message, .. }
+}
