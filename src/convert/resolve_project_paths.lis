@@ -1,11 +1,15 @@
 //**
-// convert/phase01_resolve_project_paths.lis
+// convert/resolve_project_paths.lis
 // capp-nib2cib
 //
 // Created by David Richardson on Thursday, July 30, 2026.
 // Copyright (c) 2026 David Richardson. All rights reserved.
 //
-// Phase 1: ResolveProjectPaths
+// Build step (Manager's first job — see pipeline.lis). Not a phase, not
+// part of any enum: this is the collection this tool operates over —
+// Slice<ConvertTarget> — plus the one function that builds it. Nothing
+// here runs per-file, and nothing here runs concurrently; it runs once,
+// before the per-file TargetPhase pipeline can start.
 //
 // Finds the project root by walking upward from a start directory, so the
 // tool runs correctly from any point in the source tree — mirroring
@@ -171,7 +175,7 @@ fn expand_input(input: string, root: Ref<ProjectRoot>) -> Result<Slice<ConvertTa
 }
 
 // ---------------------------------------------------------------------------
-// Phase entry point
+// Build step entry point
 // ---------------------------------------------------------------------------
 
 pub struct ResolveProjectPathsResult {

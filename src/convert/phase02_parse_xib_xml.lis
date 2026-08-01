@@ -142,7 +142,9 @@ fn parse_xib_tree(path: string) -> Result<XibNode, error> {
 // status line below.
 fn count_nodes(node: Ref<XibNode>) -> int {
   let mut n = 1
-  for c in node.children { n += count_nodes(&c) }
+  for c in node.children {
+    n += count_nodes(&c)
+  }
   n
 }
 

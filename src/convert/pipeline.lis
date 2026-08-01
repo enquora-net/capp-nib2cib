@@ -5,35 +5,41 @@
 // Created by David Richardson on Thursday, July 30, 2026.
 // Copyright (c) 2026 David Richardson. All rights reserved.
 //
-// Phase pipeline declaration and orchestration.
+// Three distinct things live in this package, not one pipeline:
 //
-// Two different kinds of "phase" live in this file, and they are not
-// treated as one enum:
+// - The collection: Slice<ConvertTarget> (defined in
+//   resolve_project_paths.lis). Plain data — one xib_path/cib_path pair
+//   per file to convert.
 //
-// - ResolveProjectPaths (phase01_resolve_project_paths.lis) is a single
-//   sequential setup step. It runs once, produces the target list, and has
-//   no per-file concurrency to offer — root-finding depends on nothing
-//   about individual files, and every target's CIB path depends on the
-//   single root it finds. It is a plain function call, not an enum variant.
+// - The manager (this file): builds the collection, then executes the
+//   per-file pipeline over it, then summarizes. Three named jobs, in
+//   sequence:
+//     build     -> run_resolve_project_paths (resolve_project_paths.lis)
+//     execute   -> execute_targets (below)
+//     summarize -> summarize_results (below)
+//   convert() is the sequence of those three calls and nothing else. The
+//   manager itself is not a phase and is not #[iterate]d — it runs once,
+//   is not per-file, and has no variants.
 //
-// - TargetPhase (phase02_parse_xib_xml.lis through
-//   phase06_emit_capp2plist.lis) are the five per-file phases. Every XIB is
+// - The pipeline: TargetPhase (phase02_parse_xib_xml.lis through
+//   phase06_emit_capp2plist.lis), the five per-file phases. Every XIB is
 //   independent of every other XIB through the entire pipeline — nothing
 //   about parsing, flattening, interning, resolving, or emitting one file
 //   depends on any other file. TargetPhase is #[iterate]d once per target,
-//   inside its own worker (run_target), running concurrently with every
-//   other target's worker. There is no cross-target synchronization at any
-//   phase boundary: an earlier design gated all files on every phase
-//   together (see git history) and was rejected as needless coupling
-//   between files that share nothing.
+//   inside its own worker (run_target). execute_targets runs one
+//   run_target call per item in the collection, concurrently, with no
+//   cross-target synchronization at any phase boundary: an earlier design
+//   gated all files on every phase together (see git history) and was
+//   rejected as needless coupling between files that share nothing.
 //
 // Diagnostic infrastructure lives in diagnostics.lis.
 //
-// TargetPhase implementations are still bare stubs, pending the XIB XML
-// parser, object graph flattener, string interner, UID resolver, and
-// CAPP2PLIST emitter. ResolveProjectPaths is implemented and has been
-// manually verified against real project trees (single file, 1 target;
-// ~/Developer/Cappuccino/Fieldwork, 126 targets).
+// TargetPhase implementations are stubs except ParseXibXml (implemented).
+// The build step is implemented and has been manually verified against
+// real project trees (single file, 1 target; ~/Developer/Cappuccino/
+// Fieldwork, 126 targets). Concurrent execute_targets over a directory
+// with several xibs has not yet been manually verified beyond the
+// single-target case.
 //
 // **
 import "go:strings"
@@ -103,7 +109,7 @@ fn target_phase_name(phase: TargetPhase) -> string {
 // input is empty, a single .xib path, or a directory. ResolveProjectPaths
 // is the only place that interprets it and the only place a CIB output path
 // is computed — output is never taken from the command line. See
-// phase01_resolve_project_paths.lis.
+// resolve_project_paths.lis.
 pub struct ConvertConfig {
   pub input: string,
   pub default_theme: string,
@@ -224,27 +230,13 @@ fn run_target(target: ConvertTarget, cfg: ConvertConfig) -> TargetResult {
 }
 
 // ---------------------------------------------------------------------------
-// Orchestration
+// Manager: execute step
 // ---------------------------------------------------------------------------
 
-// convert runs ResolveProjectPaths once, then fans out one concurrent
-// worker per target via task {}, then fans in every TargetResult over a
-// single Channel before reporting a batch summary. One target failing does
-// not stop or affect any other target's worker.
-pub fn convert(cfg: ConvertConfig) -> Result<ConvertResult, error> {
-  let paths_result = run_resolve_project_paths(&cfg)?
-  if has_error(paths_result.diags) {
-    let n = error_count(paths_result.diags)
-    return Ok(
-      ConvertResult {
-        ok: false,
-        message: paths_halt_message(n, paths_result.diags),
-        diags: paths_result.diags,
-      },
-    )
-  }
-
-  let targets = paths_result.targets
+// execute_targets runs one run_target call per target, concurrently, via
+// task {}, and fans every TargetResult back in over a single Channel. Order
+// of results is not the order of targets — only the count is guaranteed.
+fn execute_targets(targets: Slice<ConvertTarget>, cfg: ConvertConfig) -> Slice<TargetResult> {
   let results_ch = Channel.new<TargetResult>()
   for target in targets {
     task {
@@ -258,7 +250,14 @@ pub fn convert(cfg: ConvertConfig) -> Result<ConvertResult, error> {
     if let Some(r) = results_ch.receive() { results = results.append(r) }
     received += 1
   }
+  results
+}
 
+// ---------------------------------------------------------------------------
+// Manager: summarize step
+// ---------------------------------------------------------------------------
+
+fn summarize_results(results: Slice<TargetResult>) -> ConvertResult {
   let mut failed = 0
   let mut all_diags: Slice<Diagnostic> = []
   for r in results {
@@ -269,13 +268,36 @@ pub fn convert(cfg: ConvertConfig) -> Result<ConvertResult, error> {
   }
   let succeeded = results.length() - failed
 
-  Ok(
-    ConvertResult {
-      ok: failed == 0,
-      message: f"convert complete: {succeeded}/{targets.length()} target(s) succeeded",
-      diags: all_diags,
-    },
-  )
+  ConvertResult {
+    ok: failed == 0,
+    message: f"convert complete: {succeeded}/{results.length()} target(s) succeeded",
+    diags: all_diags,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Manager entry point
+// ---------------------------------------------------------------------------
+
+// convert is the manager's three jobs, in sequence, and nothing else: build
+// the collection, execute the per-file pipeline over it, summarize the
+// results. A build-step Error halts before execute_targets is ever called —
+// no target worker starts until the collection it depends on exists.
+pub fn convert(cfg: ConvertConfig) -> Result<ConvertResult, error> {
+  let paths_result = run_resolve_project_paths(&cfg)?
+  if has_error(paths_result.diags) {
+    let n = error_count(paths_result.diags)
+    return Ok(
+      ConvertResult {
+        ok: false,
+        message: paths_halt_message(n, paths_result.diags),
+        diags: paths_result.diags,
+      },
+    )
+  }
+
+  let results = execute_targets(paths_result.targets, cfg)
+  Ok(summarize_results(results))
 }
 
 // paths_halt_message renders a ResolveProjectPaths halt with concrete Error

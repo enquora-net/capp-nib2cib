@@ -14,9 +14,8 @@ import "go:os"
 import "convert"
 
 fn run_convert(cmd: Ref<cobra.Command>, args: Slice<string>) {
-  // An empty input means "the whole project tree" — resolved by
-  // convert.ResolveProjectPaths, not decided here. See
-  // convert/phase01_resolve_project_paths.lis.
+  // An empty input means "the whole project tree" — resolved by the
+  // build step, not decided here. See convert/resolve_project_paths.lis.
   let input = if args.length() > 0 { args[0] } else { "" }
   let flags = read_shared_flags(cmd)
   let cfg = convert.ConvertConfig {
@@ -32,7 +31,9 @@ fn run_convert(cmd: Ref<cobra.Command>, args: Slice<string>) {
     Ok(result) => {
       if !result.ok {
         for d in result.diags {
-          if d.level == convert.DiagLevel.Error { cmd.Println(f"  [{d.phase}] {d.message}") }
+          if d.level == convert.DiagLevel.Error {
+            cmd.Println(f"  [{d.phase}] {d.message}")
+          }
         }
       }
       cmd.Println(result.message)
@@ -47,7 +48,7 @@ fn run_convert(cmd: Ref<cobra.Command>, args: Slice<string>) {
 
 fn new_convert_cmd() -> cobra.Command {
   // Output is never a CLI argument: every CIB lands in ./Resources under
-  // the project root, always. See convert/phase01_resolve_project_paths.lis.
+  // the project root, always. See convert/resolve_project_paths.lis.
   let mut cmd = make_command_with_max_args(
     "convert [INPUT]",
     "Convert one XIB, a directory of XIBs, or the whole project to CIB",
