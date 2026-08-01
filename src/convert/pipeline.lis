@@ -7,27 +7,49 @@
 //
 // Phase pipeline declaration and orchestration.
 //
+// Two different kinds of "phase" live in this file, and they are not
+// treated as one enum:
+//
+// - ResolveProjectPaths (phase01_resolve_project_paths.lis) is a single
+//   sequential setup step. It runs once, produces the target list, and has
+//   no per-file concurrency to offer — root-finding depends on nothing
+//   about individual files, and every target's CIB path depends on the
+//   single root it finds. It is a plain function call, not an enum variant.
+//
+// - TargetPhase (phase02_parse_xib_xml.lis through
+//   phase06_emit_capp2plist.lis) are the five per-file phases. Every XIB is
+//   independent of every other XIB through the entire pipeline — nothing
+//   about parsing, flattening, interning, resolving, or emitting one file
+//   depends on any other file. TargetPhase is #[iterate]d once per target,
+//   inside its own worker (run_target), running concurrently with every
+//   other target's worker. There is no cross-target synchronization at any
+//   phase boundary: an earlier design gated all files on every phase
+//   together (see git history) and was rejected as needless coupling
+//   between files that share nothing.
+//
 // Diagnostic infrastructure lives in diagnostics.lis.
-// Phase implementations live in phase01_resolve_project_paths.lis through
-// phase06_emit_capp2plist.lis. Phase 1 finds the project root and expands
-// the input path into concrete conversion targets. The remaining five are
-// bare stubs pending the XIB XML parser, object graph flattener, string
-// interner, UID resolver, and CAPP2PLIST emitter.
+//
+// TargetPhase implementations are still bare stubs, pending the XIB XML
+// parser, object graph flattener, string interner, UID resolver, and
+// CAPP2PLIST emitter. ResolveProjectPaths is implemented and has been
+// manually verified against real project trees (single file, 1 target;
+// ~/Developer/Cappuccino/Fieldwork, 126 targets).
 //
 // **
 import "go:strings"
 
 // ---------------------------------------------------------------------------
-// Nib2CibPhase
+// TargetPhase
 // ---------------------------------------------------------------------------
 
 // The compiler confirms that each variant has an implementation and that it
 // runs in the correct order via the execution machinery below. Declaration
-// order is the authoritative execution order; #[iterate] synthesises
-// variants() from it.
+// order is the authoritative per-target execution order; #[iterate]
+// synthesises variants() from it. This order applies within one target's
+// worker only — it says nothing about the order targets themselves run in,
+// since targets run concurrently with no ordering guarantee between them.
 #[iterate]
-pub enum Nib2CibPhase {
-  ResolveProjectPaths,
+pub enum TargetPhase {
   ParseXibXml,
   FlattenObjectGraph,
   InternStrings,
@@ -35,15 +57,11 @@ pub enum Nib2CibPhase {
   EmitCapp2Plist,
 }
 
-// Adding a variant to Nib2CibPhase without a corresponding arm here is a
+// Adding a variant to TargetPhase without a corresponding arm here is a
 // compile error — the binding between declaration and execution.
-impl Nib2CibPhase {
-  fn run(self, ctx: Ref<PipelineContext>) -> Result<(), error> {
+impl TargetPhase {
+  fn run(self, ctx: Ref<TargetContext>) -> Result<(), error> {
     match self {
-      ResolveProjectPaths => {
-        ctx.paths = Some(run_resolve_project_paths(ctx)?)
-        Ok(())
-      },
       ParseXibXml => {
         ctx.parsed = Some(run_parse_xib_xml(ctx)?)
         Ok(())
@@ -68,14 +86,24 @@ impl Nib2CibPhase {
   }
 }
 
+fn target_phase_name(phase: TargetPhase) -> string {
+  match phase {
+    ParseXibXml => "parse XIB XML",
+    FlattenObjectGraph => "flatten object graph",
+    InternStrings => "intern strings",
+    ResolveUidReferences => "resolve UID references",
+    EmitCapp2Plist => "emit CAPP2PLIST",
+  }
+}
+
 // ---------------------------------------------------------------------------
 // ConvertConfig / ConvertResult
 // ---------------------------------------------------------------------------
 
-// input is empty, a single .xib path, or a directory. Phase 1
-// (ResolveProjectPaths) is the only place that interprets it and the only
-// place a CIB output path is computed — output is never taken from the
-// command line. See phase01_resolve_project_paths.lis.
+// input is empty, a single .xib path, or a directory. ResolveProjectPaths
+// is the only place that interprets it and the only place a CIB output path
+// is computed — output is never taken from the command line. See
+// phase01_resolve_project_paths.lis.
 pub struct ConvertConfig {
   pub input: string,
   pub default_theme: string,
@@ -93,15 +121,15 @@ pub struct ConvertResult {
 }
 
 // ---------------------------------------------------------------------------
-// Pipeline context
+// Per-target context and result
 // ---------------------------------------------------------------------------
 
-// Each phase output field is Option-typed. None indicates the phase has not
-// yet executed; Some indicates it completed and its result is available to
-// downstream phases. No phase begins until all predecessor fields are Some.
-pub struct PipelineContext {
+// One TargetContext per file, owned entirely by that file's worker. Nothing
+// here is shared with any other target's context — this is what makes
+// concurrent, unsynchronized execution across targets sound.
+pub struct TargetContext {
+  pub target: ConvertTarget,
   pub config: ConvertConfig,
-  pub paths: Option<ResolveProjectPathsResult>,
   pub parsed: Option<ParseXibXmlResult>,
   pub flattened: Option<FlattenObjectGraphResult>,
   pub interned: Option<InternStringsResult>,
@@ -109,13 +137,8 @@ pub struct PipelineContext {
   pub emitted: Option<EmitCapp2PlistResult>,
 }
 
-// phase_diags returns the diagnostics produced by a phase, read from the
-// ctx field that phase populates. Exhaustive over Nib2CibPhase: adding a
-// phase without an arm here is a compile error. A None field means the
-// phase did not run (an earlier phase halted), yielding no diagnostics.
-fn phase_diags(phase: Nib2CibPhase, ctx: Ref<PipelineContext>) -> Slice<Diagnostic> {
+fn target_phase_diags(phase: TargetPhase, ctx: Ref<TargetContext>) -> Slice<Diagnostic> {
   match phase {
-    ResolveProjectPaths => ctx.paths.map_or([], |r| r.diags),
     ParseXibXml => ctx.parsed.map_or([], |r| r.diags),
     FlattenObjectGraph => ctx.flattened.map_or([], |r| r.diags),
     InternStrings => ctx.interned.map_or([], |r| r.diags),
@@ -139,19 +162,26 @@ fn error_count(diags: Slice<Diagnostic>) -> int {
   n
 }
 
-// ---------------------------------------------------------------------------
-// Pipeline orchestration
-// ---------------------------------------------------------------------------
+pub struct TargetResult {
+  pub target: ConvertTarget,
+  pub ok: bool,
+  pub message: string,
+  pub diags: Slice<Diagnostic>,
+}
 
-// A phase returning Err halts the pipeline; Warning-level diagnostics do not.
+// run_target runs every TargetPhase for one file, start to finish, halting
+// on the first phase that reports an Error — for THIS target only. Another
+// target's worker halting has no effect here, and this worker halting has
+// no effect on any other target's worker.
 //
-// The ConvertConfig literal is constructed inline as part of the
-// PipelineContext literal rather than bound to a name first: ctx is a mut
-// binding, and Lisette's aliasing protection (extended to collection
-// wrappers) flags any named sibling binding whose Slice fields could be
-// implicitly mutated through ctx. An inline literal has no such sibling.
-pub fn convert(cfg: ConvertConfig) -> Result<ConvertResult, error> {
-  let mut ctx = PipelineContext {
+// The config field is built as an inline ConvertConfig literal (cloning its
+// Slice fields) rather than moved from the cfg parameter directly, for the
+// same reason convert() below does this: ctx is a mut binding, and
+// Lisette's aliasing protection flags a Slice-bearing sibling binding that
+// could be implicitly mutated through it.
+fn run_target(target: ConvertTarget, cfg: ConvertConfig) -> TargetResult {
+  let mut ctx = TargetContext {
+    target,
     config: ConvertConfig {
       input: cfg.input,
       default_theme: cfg.default_theme,
@@ -164,35 +194,92 @@ pub fn convert(cfg: ConvertConfig) -> Result<ConvertResult, error> {
     ..,
   }
 
-  for phase in Nib2CibPhase.variants() {
-    phase.run(&ctx)?
-    // Gate on diagnostics: a phase that reports an Error means the input is
-    // unconvertible from this point. Halt before dependent phases run on
-    // its incomplete result. The phase has already printed its own stub
-    // notice; here we stop and report.
-    let diags = phase_diags(phase, &ctx)
+  for phase in TargetPhase.variants() {
+    if let Err(e) = phase.run(&ctx) {
+      return TargetResult {
+        target: ctx.target,
+        ok: false,
+        message: f"{ctx.target.xib_path}: error in {target_phase_name(phase)}: {e}",
+        diags: [],
+      }
+    }
+    let diags = target_phase_diags(phase, &ctx)
     if has_error(diags) {
       let n = error_count(diags)
-      return Ok(
-        ConvertResult {
-          ok: false,
-          message: halt_message(phase, n, diags),
-          diags,
-        },
-      )
+      return TargetResult {
+        target: ctx.target,
+        ok: false,
+        message: f"{ctx.target.xib_path}: halted, {n} error(s) in {target_phase_name(phase)}",
+        diags,
+      }
     }
   }
 
-  let n = ctx.paths.map_or(0, |r| r.targets.length())
+  TargetResult {
+    target: ctx.target,
+    ok: true,
+    message: f"{ctx.target.xib_path}: converted",
+    diags: [],
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Orchestration
+// ---------------------------------------------------------------------------
+
+// convert runs ResolveProjectPaths once, then fans out one concurrent
+// worker per target via task {}, then fans in every TargetResult over a
+// single Channel before reporting a batch summary. One target failing does
+// not stop or affect any other target's worker.
+pub fn convert(cfg: ConvertConfig) -> Result<ConvertResult, error> {
+  let paths_result = run_resolve_project_paths(&cfg)?
+  if has_error(paths_result.diags) {
+    let n = error_count(paths_result.diags)
+    return Ok(
+      ConvertResult {
+        ok: false,
+        message: paths_halt_message(n, paths_result.diags),
+        diags: paths_result.diags,
+      },
+    )
+  }
+
+  let targets = paths_result.targets
+  let results_ch = Channel.new<TargetResult>()
+  for target in targets {
+    task { results_ch.send(run_target(target, cfg)) }
+  }
+
+  let mut results: Slice<TargetResult> = []
+  let mut received = 0
+  while received < targets.length() {
+    if let Some(r) = results_ch.receive() { results = results.append(r) }
+    received += 1
+  }
+
+  let mut failed = 0
+  let mut all_diags: Slice<Diagnostic> = []
+  for r in results {
+    if !r.ok { failed += 1 }
+    for d in r.diags { all_diags = all_diags.append(d) }
+  }
+  let succeeded = results.length() - failed
+
   Ok(
-    ConvertResult { ok: true, message: f"convert complete: {n} target(s)", .. },
+    ConvertResult {
+      ok: failed == 0,
+      message: f"convert complete: {succeeded}/{targets.length()} target(s) succeeded",
+      diags: all_diags,
+    },
   )
 }
 
-// halt_message renders a phase halt with concrete Error diagnostics.
-fn halt_message(phase: Nib2CibPhase, error_total: int, diags: Slice<Diagnostic>) -> string {
+// paths_halt_message renders a ResolveProjectPaths halt with concrete Error
+// diagnostics. Separate from any per-target message: this only fires before
+// any target worker starts.
+fn paths_halt_message(error_total: int, diags: Slice<Diagnostic>) -> string {
   let mut lines: Slice<string> = [
-    f"convert halted: {error_total} error(s) in {phase_name(phase)}",
+    f"convert halted: {error_total} error(s) in resolve project paths",
   ]
   let mut displayed = 0
   for d in diags {
@@ -205,16 +292,4 @@ fn halt_message(phase: Nib2CibPhase, error_total: int, diags: Slice<Diagnostic>)
     lines = lines.append(f"  ... {error_total - displayed} more error(s)")
   }
   strings.Join(lines, "\n")
-}
-
-// phase_name renders a phase for halt messages.
-fn phase_name(phase: Nib2CibPhase) -> string {
-  match phase {
-    ResolveProjectPaths => "resolve project paths",
-    ParseXibXml => "parse XIB XML",
-    FlattenObjectGraph => "flatten object graph",
-    InternStrings => "intern strings",
-    ResolveUidReferences => "resolve UID references",
-    EmitCapp2Plist => "emit CAPP2PLIST",
-  }
 }

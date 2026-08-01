@@ -5,11 +5,13 @@
 // Created by David Richardson on Thursday, July 30, 2026.
 // Copyright (c) 2026 David Richardson. All rights reserved.
 //
-// Phase 4: InternStrings
+// TargetPhase: InternStrings
 //
-// Stub. Will intern the flattened object table's string values into a
-// deduplicated string pool (from phase 3's flattened table) ahead of UID
-// resolution.
+// Stub. Runs once per target, concurrently with every other target's
+// worker. Will intern the flattened object table's string values into a
+// deduplicated string pool ahead of UID resolution. The pool is scoped to
+// this one target's CIB, not shared across the batch — targets have no
+// shared state anywhere in this pipeline.
 //
 // **
 import "go:fmt"
@@ -18,7 +20,7 @@ pub struct InternStringsResult {
   pub diags: Slice<Diagnostic>,
 }
 
-pub fn run_intern_strings(_ctx: Ref<PipelineContext>) -> Result<InternStringsResult, error> {
-  fmt.Println("○  intern-strings: stub")
+pub fn run_intern_strings(ctx: Ref<TargetContext>) -> Result<InternStringsResult, error> {
+  fmt.Println(f"○  intern-strings: stub — {ctx.target.xib_path}")
   Ok(InternStringsResult { diags: [] })
 }

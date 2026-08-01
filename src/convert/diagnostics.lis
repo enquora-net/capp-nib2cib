@@ -10,6 +10,13 @@
 // Phases accumulate Diagnostics rather than aborting on the first failure,
 // so the full set of defects is surfaced in a single conversion pass.
 //
+// phase is a plain string label, not an enum: ResolveProjectPaths (a single
+// sequential setup step) and the five TargetPhase variants (run
+// concurrently, one worker per file — see pipeline.lis) are not the same
+// kind of thing and are no longer one enum. A Diagnostic only needs a
+// readable phase name, not to be typed against whichever enum happened to
+// produce it.
+//
 // File/line/col attribution (diag_error_at / diag_warn_at) is deferred until
 // phase 1 has an actual XML parser producing source positions to attribute.
 //
@@ -22,7 +29,7 @@ pub enum DiagLevel {
 }
 
 pub struct Diagnostic {
-  pub phase: Nib2CibPhase,
+  pub phase: string,
   pub level: DiagLevel,
   pub message: string,
   pub file: Option<string>,
@@ -30,14 +37,14 @@ pub struct Diagnostic {
   pub col: Option<int>, // 1-based; None when no source position is available
 }
 
-pub fn diag_info(phase: Nib2CibPhase, message: string) -> Diagnostic {
+pub fn diag_info(phase: string, message: string) -> Diagnostic {
   Diagnostic { phase, level: DiagLevel.Info, message, .. }
 }
 
-pub fn diag_warn(phase: Nib2CibPhase, message: string) -> Diagnostic {
+pub fn diag_warn(phase: string, message: string) -> Diagnostic {
   Diagnostic { phase, level: DiagLevel.Warning, message, .. }
 }
 
-pub fn diag_error(phase: Nib2CibPhase, message: string) -> Diagnostic {
+pub fn diag_error(phase: string, message: string) -> Diagnostic {
   Diagnostic { phase, level: DiagLevel.Error, message, .. }
 }

@@ -15,14 +15,14 @@
 // extract shared code to right now.
 //
 // The start directory is NOT always the current working directory: it is
-// derived from ctx.config.input when input names a path, and falls back to
+// derived from config.input when input names a path, and falls back to
 // cwd only when input is empty. INPUT commonly names a tree the tool was
 // not invoked from (e.g. "capp-nib2cib convert ~/Desktop/some-project" run
 // from inside capp-nib2cib's own checkout) — searching upward from cwd in
 // that case searches the wrong tree entirely and fails even when the named
 // project is perfectly valid.
 //
-// Also expands ctx.config.input into the concrete set of conversion targets:
+// Also expands config.input into the concrete set of conversion targets:
 //   input omitted     -> every .xib under the project root
 //   input is a directory -> every .xib under that directory
 //   input is a single file -> that file alone
@@ -144,8 +144,8 @@ fn find_xibs_under(dir: string) -> Result<Slice<string>, error> {
   Ok(acc.paths)
 }
 
-// expand_input classifies ctx.config.input and returns every ConvertTarget
-// it names. An empty input means "the whole project tree."
+// expand_input classifies config.input and returns every ConvertTarget it
+// names. An empty input means "the whole project tree."
 fn expand_input(input: string, root: Ref<ProjectRoot>) -> Result<Slice<ConvertTarget>, error> {
   let xibs = if input == "" {
     find_xibs_under(root.path)?
@@ -180,21 +180,19 @@ pub struct ResolveProjectPathsResult {
   pub targets: Slice<ConvertTarget>,
 }
 
-pub fn run_resolve_project_paths(ctx: Ref<PipelineContext>) -> Result<ResolveProjectPathsResult, error> {
-  let start = resolve_search_start(ctx.config.input)?
+pub fn run_resolve_project_paths(config: Ref<ConvertConfig>) -> Result<ResolveProjectPathsResult, error> {
+  let start = resolve_search_start(config.input)?
   let root = find_project_root(start)?
-  let targets = expand_input(ctx.config.input, &root)?
+  let targets = expand_input(config.input, &root)?
 
-  // Status output: this is the only phase whose success is otherwise
-  // invisible to the user — phases 2 and 6 report a target count read from
-  // this phase's result, but nothing reports the root path or the target
-  // list itself. Gated by --quiet; per-target detail additionally gated by
-  // --verbose.
-  if !ctx.config.quiet {
+  // Status output: this is the only step whose success is otherwise
+  // invisible to the user. Gated by --quiet; per-target detail additionally
+  // gated by --verbose.
+  if !config.quiet {
     fmt.Println(
       f"✓  resolve-project-paths: root={root.path} targets={targets.length()}",
     )
-    if ctx.config.verbose >= 1 {
+    if config.verbose >= 1 {
       for t in targets {
         fmt.Println(f"     {t.xib_path} -> {t.cib_path}")
       }
@@ -205,10 +203,7 @@ pub fn run_resolve_project_paths(ctx: Ref<PipelineContext>) -> Result<ResolvePro
     return Ok(
       ResolveProjectPathsResult {
         diags: [
-          diag_error(
-            Nib2CibPhase.ResolveProjectPaths,
-            "no .xib files found to convert",
-          ),
+          diag_error("resolve project paths", "no .xib files found to convert"),
         ],
         root,
         targets: [],

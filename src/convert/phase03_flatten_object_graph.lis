@@ -5,10 +5,12 @@
 // Created by David Richardson on Thursday, July 30, 2026.
 // Copyright (c) 2026 David Richardson. All rights reserved.
 //
-// Phase 3: FlattenObjectGraph
+// TargetPhase: FlattenObjectGraph
 //
-// Stub. Will walk the parsed XIB tree from phase 2 and flatten it into a
-// linear object table, mirroring the XIB structure one-to-one.
+// Stub. Runs once per target, concurrently with every other target's
+// worker. Will walk the parsed XIB tree from the ParseXibXml phase and
+// flatten it into a linear object table, mirroring the XIB structure
+// one-to-one.
 //
 // **
 import "go:fmt"
@@ -17,7 +19,7 @@ pub struct FlattenObjectGraphResult {
   pub diags: Slice<Diagnostic>,
 }
 
-pub fn run_flatten_object_graph(_ctx: Ref<PipelineContext>) -> Result<FlattenObjectGraphResult, error> {
-  fmt.Println("○  flatten-object-graph: stub")
+pub fn run_flatten_object_graph(ctx: Ref<TargetContext>) -> Result<FlattenObjectGraphResult, error> {
+  fmt.Println(f"○  flatten-object-graph: stub — {ctx.target.xib_path}")
   Ok(FlattenObjectGraphResult { diags: [] })
 }

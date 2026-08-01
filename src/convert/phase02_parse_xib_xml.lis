@@ -5,12 +5,17 @@
 // Created by David Richardson on Thursday, July 30, 2026.
 // Copyright (c) 2026 David Richardson. All rights reserved.
 //
-// Phase 2: ParseXibXml
+// TargetPhase: ParseXibXml
 //
-// Stub. Will parse the XIB XML tree at each target's xib_path (phase 1's
-// resolved list, in ctx.paths) into a typed CST, with zero semantic
-// knowledge of AppKit (see README.md — blind structural transpiler, not the
-// legacy semantic interpreter).
+// Stub. Runs once per target, concurrently with every other target's
+// worker (see pipeline.lis's run_target). Will parse the XIB XML tree at
+// ctx.target.xib_path into a typed CST, with zero semantic knowledge of
+// AppKit (see README.md — blind structural transpiler, not the legacy
+// semantic interpreter).
+//
+// Output here is per-target and will interleave arbitrarily with every
+// other target's output — expected under concurrent execution, and left
+// unrefined for now.
 //
 // **
 import "go:fmt"
@@ -19,8 +24,7 @@ pub struct ParseXibXmlResult {
   pub diags: Slice<Diagnostic>,
 }
 
-pub fn run_parse_xib_xml(ctx: Ref<PipelineContext>) -> Result<ParseXibXmlResult, error> {
-  let n = ctx.paths.map_or(0, |r| r.targets.length())
-  fmt.Println(f"○  parse-xib-xml: stub — {n} target(s)")
+pub fn run_parse_xib_xml(ctx: Ref<TargetContext>) -> Result<ParseXibXmlResult, error> {
+  fmt.Println(f"○  parse-xib-xml: stub — {ctx.target.xib_path}")
   Ok(ParseXibXmlResult { diags: [] })
 }

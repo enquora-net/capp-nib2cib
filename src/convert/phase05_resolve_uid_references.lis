@@ -5,10 +5,11 @@
 // Created by David Richardson on Thursday, July 30, 2026.
 // Copyright (c) 2026 David Richardson. All rights reserved.
 //
-// Phase 5: ResolveUidReferences
+// TargetPhase: ResolveUidReferences
 //
-// Stub. Will resolve XIB string object IDs to integer CP$UID references
-// against the interned string pool from phase 4.
+// Stub. Runs once per target, concurrently with every other target's
+// worker. Will resolve XIB string object IDs to integer CP$UID references
+// against this target's own interned string pool from InternStrings.
 //
 // **
 import "go:fmt"
@@ -17,7 +18,7 @@ pub struct ResolveUidReferencesResult {
   pub diags: Slice<Diagnostic>,
 }
 
-pub fn run_resolve_uid_references(_ctx: Ref<PipelineContext>) -> Result<ResolveUidReferencesResult, error> {
-  fmt.Println("○  resolve-uid-references: stub")
+pub fn run_resolve_uid_references(ctx: Ref<TargetContext>) -> Result<ResolveUidReferencesResult, error> {
+  fmt.Println(f"○  resolve-uid-references: stub — {ctx.target.xib_path}")
   Ok(ResolveUidReferencesResult { diags: [] })
 }
