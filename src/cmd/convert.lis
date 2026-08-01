@@ -30,6 +30,11 @@ fn run_convert(cmd: Ref<cobra.Command>, args: Slice<string>) {
   }
   match convert.convert(cfg) {
     Ok(result) => {
+      if !result.ok {
+        for d in result.diags {
+          if d.level == convert.DiagLevel.Error { cmd.Println(f"  [{d.phase}] {d.message}") }
+        }
+      }
       cmd.Println(result.message)
       if !result.ok { os.Exit(1) }
     },

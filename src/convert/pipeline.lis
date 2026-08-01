@@ -247,7 +247,9 @@ pub fn convert(cfg: ConvertConfig) -> Result<ConvertResult, error> {
   let targets = paths_result.targets
   let results_ch = Channel.new<TargetResult>()
   for target in targets {
-    task { results_ch.send(run_target(target, cfg)) }
+    task {
+      results_ch.send(run_target(target, cfg))
+    }
   }
 
   let mut results: Slice<TargetResult> = []
@@ -261,7 +263,9 @@ pub fn convert(cfg: ConvertConfig) -> Result<ConvertResult, error> {
   let mut all_diags: Slice<Diagnostic> = []
   for r in results {
     if !r.ok { failed += 1 }
-    for d in r.diags { all_diags = all_diags.append(d) }
+    for d in r.diags {
+      all_diags = all_diags.append(d)
+    }
   }
   let succeeded = results.length() - failed
 

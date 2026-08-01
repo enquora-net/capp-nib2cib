@@ -7,24 +7,168 @@
 //
 // TargetPhase: ParseXibXml
 //
-// Stub. Runs once per target, concurrently with every other target's
-// worker (see pipeline.lis's run_target). Will parse the XIB XML tree at
-// ctx.target.xib_path into a typed CST, with zero semantic knowledge of
-// AppKit (see README.md — blind structural transpiler, not the legacy
-// semantic interpreter).
+// Parses the XIB XML at ctx.target.xib_path into a generic node tree
+// (XibNode) via Go's encoding/xml token stream — not into typed
+// AppKit-object structs. This tool has zero semantic knowledge of AppKit
+// (see README.md), so the parse stage only needs XML structure (elements,
+// attributes, text), never what a <string> or <object class="..."> means.
+// No third-party XML library is used or needed: Go's stdlib
+// encoding/xml.Decoder is a full streaming tokenizer, sufficient to build
+// an arbitrary tree by hand via an explicit stack.
 //
-// Output here is per-target and will interleave arbitrarily with every
-// other target's output — expected under concurrent execution, and left
-// unrefined for now.
+// Go's xml.Token is `type Token any` — narrowed here with assert_type<T>()
+// per AGENTS.md (any/interface{} binds as Unknown in Lisette; match only
+// dispatches on Lisette-defined enum variants, not arbitrary Go interface
+// concrete types — an earlier attempt at `match tok { xml.StartElement as
+// se => ... }` was invented syntax with no basis and was rejected outright
+// by the compiler).
+//
+// Malformed XML (the one way this phase is expected to fail — XIBs are
+// otherwise machine-written, but direct hand-editing happens and must be
+// tolerated, not crash the tool) surfaces as an Error diagnostic. Go's
+// xml.SyntaxError carries a Line field for free; that line number is
+// attached to the diagnostic message via assert_type<xml.SyntaxError>.
+// Per-node source positions within the tree itself are not tracked yet —
+// deferred until a downstream phase needs to point at a specific node, not
+// just report "the file failed to parse."
 //
 // **
+import "go:bytes"
+import "go:encoding/xml"
+import "go:errors"
 import "go:fmt"
+import "go:io"
+import "go:os"
+
+pub struct XibAttr {
+  pub key: string,
+  pub value: string,
+}
+
+pub struct XibNode {
+  pub tag: string,
+  pub attrs: Slice<XibAttr>,
+  pub children: Slice<XibNode>,
+  pub text: string,
+}
 
 pub struct ParseXibXmlResult {
   pub diags: Slice<Diagnostic>,
+  pub tree: Option<XibNode>,
+}
+
+// xml_syntax_line extracts the line number from a Go xml.SyntaxError, if
+// that's what failed. Any other error (a read failure, a truncated file, a
+// missing root element) has no line of its own to report.
+fn xml_syntax_line(e: error) -> Option<int> {
+  assert_type<xml.SyntaxError>(e).map(|se| se.Line)
+}
+
+// replace_at rebuilds the node at index i in stack with a fresh value
+// rather than reading it into a mut binding: XibNode carries Slice fields
+// (attrs, children), and Lisette's mut-aliasing protection rejects binding
+// mut to a value read out of a Slice for exactly that reason (this class of
+// error has come up repeatedly in this codebase — see pipeline.lis and
+// phase01's collect_xibs). Constructing the replacement inline, never
+// naming the old value as a mut binding, sidesteps it.
+fn append_child(stack: Ref<Slice<XibNode>>, idx: int, child: XibNode) {
+  let existing = stack.*[idx]
+  stack.*[idx] = XibNode {
+    tag: existing.tag,
+    attrs: existing.attrs.clone(),
+    children: existing.children.append(child),
+    text: existing.text,
+  }
+}
+
+fn append_text(stack: Ref<Slice<XibNode>>, idx: int, text: string) {
+  let existing = stack.*[idx]
+  stack.*[idx] = XibNode {
+    tag: existing.tag,
+    attrs: existing.attrs.clone(),
+    children: existing.children.clone(),
+    text: existing.text + text,
+  }
+}
+
+// parse_xib_tree builds the tree via an explicit stack: StartElement pushes
+// a new node, EndElement pops the top node and attaches it to the new top
+// as a child (or, if the stack is now empty, that popped node is the
+// document root), CharData appends to the top node's text.
+fn parse_xib_tree(path: string) -> Result<XibNode, error> {
+  let data = os.ReadFile(path)?
+  let decoder = xml.NewDecoder(bytes.NewReader(data))
+  let mut stack: Slice<XibNode> = []
+  let mut root: Option<XibNode> = None
+
+  loop {
+    match decoder.Token() {
+      Err(e) => {
+        if errors.Is(e, io.EOF) { break }
+        return Err(e)
+      },
+      Ok(tok) => {
+        if let Some(se) = assert_type<xml.StartElement>(tok) {
+          let mut attrs: Slice<XibAttr> = []
+          for a in se.Attr {
+            attrs = attrs.append(XibAttr { key: a.Name.Local, value: a.Value })
+          }
+          stack = stack.append(
+            XibNode { tag: se.Name.Local, attrs, children: [], text: "" },
+          )
+        } else if let Some(_ee) = assert_type<xml.EndElement>(tok) {
+          let idx = stack.length() - 1
+          let closed = stack[idx]
+          stack = stack[..idx]
+          if stack.is_empty() {
+            root = Some(closed)
+          } else {
+            append_child(&stack, stack.length() - 1, closed)
+          }
+        } else if let Some(cd) = assert_type<xml.CharData>(tok) {
+          if !stack.is_empty() {
+            append_text(&stack, stack.length() - 1, cd as string)
+          }
+        }
+        // else: Comment, ProcInst, Directive — ignored, no tree impact.
+      },
+    }
+  }
+
+  root.ok_or_else(|| errors.New("empty document: no root element"))
+}
+
+// count_nodes counts a tree's nodes, itself included. Used only for the
+// status line below.
+fn count_nodes(node: Ref<XibNode>) -> int {
+  let mut n = 1
+  for c in node.children { n += count_nodes(&c) }
+  n
 }
 
 pub fn run_parse_xib_xml(ctx: Ref<TargetContext>) -> Result<ParseXibXmlResult, error> {
-  fmt.Println(f"○  parse-xib-xml: stub — {ctx.target.xib_path}")
-  Ok(ParseXibXmlResult { diags: [] })
+  match parse_xib_tree(ctx.target.xib_path) {
+    Ok(tree) => {
+      if !ctx.config.quiet {
+        let n = count_nodes(&tree)
+        fmt.Println(f"✓  parse-xib-xml: {ctx.target.xib_path} ({n} nodes)")
+      }
+      Ok(ParseXibXmlResult { diags: [], tree: Some(tree) })
+    },
+    Err(e) => {
+      let msg = xml_syntax_line(e).map_or_else(
+        || f"failed to parse: {e}",
+        |n| f"malformed XML at line {n}: {e}",
+      )
+      if !ctx.config.quiet {
+        fmt.Println(f"✕  parse-xib-xml: {ctx.target.xib_path}: {msg}")
+      }
+      Ok(
+        ParseXibXmlResult {
+          diags: [diag_error("parse XIB XML", msg)],
+          tree: None,
+        },
+      )
+    },
+  }
 }
