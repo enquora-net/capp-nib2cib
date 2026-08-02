@@ -7,19 +7,174 @@
 //
 // TargetPhase: FlattenObjectGraph
 //
-// Stub. Runs once per target, concurrently with every other target's
-// worker. Will walk the parsed XIB tree from the ParseXibXml phase and
-// flatten it into a linear object table, mirroring the XIB structure
-// one-to-one.
+// Flattens the XibNode tree from ParseXibXml into a flat table of
+// FlattenedObject rows, one per id-bearing element anywhere in the tree,
+// regardless of nesting depth. Per README.md's architecture: this tool has
+// zero semantic knowledge of AppKit, so this phase reads exactly two
+// structural facts about each element — whether it carries an id
+// attribute, and whether it carries a key attribute — and nothing else. It
+// never reads what a tag name or attribute means.
+//
+// Presence of id is XIB's own generic object-identity mechanism (see
+// XIB-FORMAT.md's "Object identity" section) — using it is not semantic
+// interpretation of any particular class. The rest of XIB-FORMAT.md (NS to
+// CP class mapping, style mask bit values, per-element attribute tables) is
+// legacy semantic-interpreter material from the prototype and is
+// deliberately NOT used here; that mapping belongs to the Cappuccino 2.0
+// runtime's mapNativeToCapp:, not to this tool.
+//
+// Elements without an id are transparent grouping wrappers when they have
+// id-bearing descendants (e.g. a <menu>'s <items> wrapping several
+// <menuItem id="...">), and plain embedded values otherwise (e.g. <rect>,
+// <font>). Both cases fall out of the same rule — recurse through any
+// non-id element — rather than needing to special-case which wrapper tags
+// exist.
 //
 // **
 import "go:fmt"
 
-pub struct FlattenObjectGraphResult {
-  pub diags: Slice<Diagnostic>,
+pub struct FlatMember {
+  // Labels (a key attribute, or a tag name when no key is present) of the
+  // element chain from the owning object down to this member. Usually one
+  // label; more when non-id wrapper elements were passed through to reach
+  // it; empty for a direct id-bearing child with neither its own key.
+  pub path: Slice<string>,
+  // Some(id): this member is a reference to another row in the flat table.
+  // None: this member is an embedded plain value (see `value`).
+  pub target_id: Option<string>,
+  // Present only when target_id is None: the raw, uninterpreted subtree.
+  pub value: Option<XibNode>,
 }
 
+pub struct FlattenedObject {
+  pub id: string,
+  pub tag: string,
+  // This object's own key attribute — how its parent names it. None for a
+  // top-level object under <objects>, which has no parent of its own.
+  pub key: Option<string>,
+  // This object's own attributes, minus id and key (those are pulled into
+  // dedicated fields above, not duplicated here).
+  pub attrs: Slice<XibAttr>,
+  pub members: Slice<FlatMember>,
+}
+
+pub struct FlattenObjectGraphResult {
+  pub diags: Slice<Diagnostic>,
+  // Discovery order (document order via traversal), not any semantic
+  // ordering.
+  pub objects: Slice<FlattenedObject>,
+}
+
+fn find_attr(node: Ref<XibNode>, key: string) -> Option<string> {
+  for a in node.attrs {
+    if a.key == key { return Some(a.value) }
+  }
+  None
+}
+
+// flatten_into registers node (which must be id-bearing — callers only
+// invoke this after confirming that) as its own row in table, recursively
+// flattening everything reachable below it first.
+fn flatten_into(node: Ref<XibNode>, table: Ref<Slice<FlattenedObject>>) {
+  let id = find_attr(node, "id").unwrap_or("")
+  let key = find_attr(node, "key")
+  let attrs = node.attrs.filter(|a| a.key != "id" && a.key != "key")
+  let members = walk_children(&node.children, [], table)
+  table.* = table.*.append(
+    FlattenedObject { id, tag: node.tag, key, attrs, members },
+  )
+}
+
+// walk_children produces the member list for whichever object is calling
+// it (the object owning `children`), while also registering every
+// id-bearing element found — at any depth, through any number of
+// transparent non-id wrappers — as its own row in table via flatten_into.
+// path accumulates wrapper labels as non-id elements are passed through.
+fn walk_children(
+  children: Ref<Slice<XibNode>>,
+  path: Slice<string>,
+  table: Ref<Slice<FlattenedObject>>,
+) -> Slice<FlatMember> {
+  let mut members: Slice<FlatMember> = []
+  for child in children.* {
+    match find_attr(&child, "id") {
+      Some(child_id) => {
+        let child_path = find_attr(&child, "key").map_or(path, |k| path.append(
+          k,
+        ))
+        members = members.append(
+          FlatMember {
+            path: child_path,
+            target_id: Some(child_id),
+            value: None,
+          },
+        )
+        flatten_into(&child, table)
+      },
+      None => {
+        let label = find_attr(&child, "key").unwrap_or(child.tag)
+        let child_path = path.append(label)
+        let deeper = walk_children(&child.children, child_path, table)
+        if deeper.is_empty() {
+          members = members.append(
+            FlatMember { path: child_path, target_id: None, value: Some(child) },
+          )
+        } else {
+          for m in deeper {
+            members = members.append(m)
+          }
+        }
+      },
+    }
+  }
+  members
+}
+
+// count and status helpers, mirroring the convention established in
+// resolve_project_paths.lis and phase02_parse_xib_xml.lis: a real
+// (non-stub) phase's success or failure must be visible to the user, not
+// silent.
 pub fn run_flatten_object_graph(ctx: Ref<TargetContext>) -> Result<FlattenObjectGraphResult, error> {
-  fmt.Println(f"○  flatten-object-graph: stub — {ctx.target.xib_path}")
-  Ok(FlattenObjectGraphResult { diags: [] })
+  let Some(parsed) = ctx.parsed else {
+    return Ok(
+      FlattenObjectGraphResult {
+        diags: [diag_error("flatten object graph", "ParseXibXml has not run")],
+        objects: [],
+      },
+    )
+  }
+  let Some(tree) = parsed.tree else {
+    return Ok(
+      FlattenObjectGraphResult {
+        diags: [diag_error("flatten object graph", "no parsed tree available")],
+        objects: [],
+      },
+    )
+  }
+
+  let mut table: Slice<FlattenedObject> = []
+  let _ = walk_children(&tree.children, [], &table)
+
+  if table.is_empty() {
+    if !ctx.config.quiet {
+      fmt.Println(
+        f"\u{2715}  flatten-object-graph: {ctx.target.xib_path}: no id-bearing objects found",
+      )
+    }
+    return Ok(
+      FlattenObjectGraphResult {
+        diags: [
+          diag_error("flatten object graph", "no id-bearing objects found"),
+        ],
+        objects: [],
+      },
+    )
+  }
+
+  if !ctx.config.quiet {
+    fmt.Println(
+      f"\u{2713}  flatten-object-graph: {ctx.target.xib_path} ({table.length()} objects)",
+    )
+  }
+  Ok(FlattenObjectGraphResult { diags: [], objects: table })
 }
