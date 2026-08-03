@@ -1,37 +1,21 @@
 # 280NPLIST Format Specification
 
-Version 1.0  
-Format version string: `280NPLIST;1.0;`
-
-This document specifies the 280NPLIST serialization format used by
-Cappuccino's `CPKeyedArchiver` / `CPKeyedUnarchiver`. Files in this
-format carry the `.cib` extension when used as Interface Builder
-archives.
-
----
+This document specifies the 280NPLIST serialization format used by Cappuccino's `CPKeyedArchiver` / `CPKeyedUnarchiver`. Files in this format carry the `.cib` extension.
 
 ## Overview
 
-280NPLIST is a text-based keyed archive format. It encodes an object
-graph as a flat table of objects with forward references by index. The
-logical structure mirrors NSKeyedArchiver but uses a compact
-token-based text encoding rather than XML plist or binary plist.
+280NPLIST is a text-based keyed archive format. It encodes an object graph as a flat table of objects with forward references by index. The logical structure mirrors NSKeyedArchiver but uses a compact token-based text encoding rather than XML or binary plists.
 
-The format is entirely ASCII-safe when content is ASCII. String values
-are encoded as raw UTF-8 bytes; length fields count bytes, not
-characters.
+The format is entirely ASCII-safe when content is ASCII. String values are encoded as raw UTF-8 bytes; length fields count bytes, not characters.
 
----
-
-## File structure
+## File Structure
 
 ```
 <header>\n<root-value>
 ```
 
-- Header: the literal string `280NPLIST;1.0;` followed by a newline
-  (or immediately by the root value — the parser must accept both).
-- Root value: a single encoded value, always a dictionary in practice.
+- **Header:** The literal string `280NPLIST;<version>;` followed by a newline (or immediately by the root value). v1.0 used `1.0`. The new blind transpiler outputs `2.0`.
+- **Root value:** A single encoded dictionary.
 
 The root dictionary has three mandatory keys:
 
@@ -41,119 +25,53 @@ The root dictionary has three mandatory keys:
 | `$objects`   | Array; the flat object table                          |
 | `$archiver`  | String; always `CPKeyedArchiver`                      |
 
-A fourth optional key `$version` carries the string `100000`.
+A fourth optional key `$version` carries a version integer (e.g., `100000` for v1.0).
 
----
+## Wire Format (Type Tokens)
 
-## Type tokens
-
-Values are encoded with a leading type token. There is no separator
-between consecutive values or between a token and its payload.
+Values are encoded with a leading type token. There is no separator between consecutive values or between a token and its payload.
 
 ### Dictionary
-
-```
-D;<key-value-pairs…>E;
-```
-
-A key must always be a `K` token (see below). The value may be any
-type. Key-value pairs appear in sequence with no delimiter. `E;`
-terminates the dictionary.
+`D;<key-value-pairs…>E;`
+A key must always be a `K` token. The value may be any type. Key-value pairs appear in sequence with no delimiter. `E;` terminates the dictionary.
 
 ### Array
-
-```
-A;<values…>E;
-```
-
+`A;<values…>E;`
 Elements may be any type. `E;` terminates the array.
 
 ### Key
-
-```
-K;<length>;<bytes>
-```
-
-`<length>` is the decimal byte count of `<bytes>`. Used only as the
-key in a dictionary entry. The key name is not followed by a semicolon
-after the bytes — the next token begins immediately.
-
-Example: `K;6;CP$UID` encodes the key `CP$UID`.
+`K;<length>;<bytes>`
+`<length>` is the decimal byte count of `<bytes>`. Used only as the key in a dictionary entry. The next token begins immediately after the bytes.
 
 ### String
-
-```
-S;<length>;<bytes>
-```
-
-`<length>` is the decimal byte count of `<bytes>`. String values may
-contain any UTF-8 bytes including semicolons and newlines. There is no
-terminating semicolon after the bytes.
-
-Example: `S;15;CPKeyedArchiver` encodes the string `CPKeyedArchiver`.
+`S;<length>;<bytes>`
+`<length>` is the decimal byte count. String values may contain any UTF-8 bytes. There is no terminating semicolon after the bytes.
 
 ### Number
-
-```
-d;<length>;<digits>
-```
-
-`<length>` is the decimal character count of `<digits>`. `<digits>` is
-the decimal representation of the number. Integers and floats are both
-encoded this way. Negative numbers include the `-` sign in the length
-count.
-
-Examples:
-- `d;1;2` → integer 2
-- `d;2;-1` → integer -1
-- `d;7;1048576` → integer 1048576
-- `d;2;50` → integer 50 (also used for float 50.0)
+`d;<length>;<digits>`
+`<length>` is the decimal character count. Integers and floats are both encoded this way. Negative numbers include the `-` sign in the length count.
 
 ### Boolean
+`T` (true) or `F` (false). No length or value suffix.
 
-```
-T
-F
-```
-
-No length or value suffix. `T` is true, `F` is false.
-
----
-
-## CP$UID (object reference)
+## CP$UID (Object Reference)
 
 An object reference is encoded as a single-key dictionary:
-
-```
-D;K;6;CP$UID;<number>E;
-```
-
+`D;K;6;CP$UID;<number>E;`
 where `<number>` is the decimal index into the `$objects` array.
 
-The key is always `CP$UID` (6 bytes). The value is always a `d` number.
+Example: `D;K;6;CP$UIDd;1;0E;` references `$objects[0]`.
 
-Example: `D;K;6;CP$UIDd;1;0E;` references `$objects[0]`, which is
-always `$null`.
+## The $objects Array
 
----
+`$objects[0]` is always the null sentinel, encoded as the string `$null` (`S;5;$null`).
 
-## The $objects array
+All other entries are:
+1. **Scalar strings** — interned string values referenced by UID.
+2. **Class descriptors** — dictionaries with `$classname` and `$classes`.
+3. **Instance dictionaries** — the encoded state of an object.
 
-`$objects[0]` is always the null sentinel, encoded as the string
-`$null`:
-
-```
-S;5;$null
-```
-
-All other entries are either:
-
-1. **Scalar strings** — interned string values referenced by UID
-2. **Class descriptors** — dictionaries with `$classname` and `$classes`
-3. **Instance dictionaries** — the encoded state of an object
-
-### Class descriptor
-
+### Class Descriptor
 ```
 D;
   K;10;$classname  S;<n>;<ClassName>
@@ -161,63 +79,34 @@ D;
 E;
 ```
 
-`$classes` lists the full inheritance chain from the class itself up to
-and including `CPObject`. Example for `CPMenu`:
+### Instance Dictionary
+Contains a `$class` key pointing to a CP$UID reference of a class descriptor, followed by one key per encoded instance variable.
 
-```
-D;
-  K;10;$classnameS;6;CPMenu
-  K;8;$classesA;S;6;CPMenuS;8;CPObjectE;
-E;
-```
+## String Interning
 
-### Instance dictionary
+Identical strings share a single entry in `$objects` and are referenced by CP$UID throughout the archive. This applies to selector strings, class names, and key names used as values.
 
-An instance dictionary contains:
-
-- `$class` → CP$UID reference to the class descriptor entry
-- One key per encoded instance variable, using the CP archive key
-  defined by `encodeWithCoder:` in the Cappuccino source
-
-Example for a `CPMenuItem`:
-
-```
-D;
-  K;6;$classD;K;6;CP$UIDd;2;55E;
-  K;18;CPMenuItemTitleKeyD;K;6;CP$UIDd;3;171E;
-  K;19;CPMenuItemTargetKeyD;K;6;CP$UIDd;2;57E;
-  K;19;CPMenuItemActionKeyD;K;6;CP$UIDd;3;172E;
-  K;20;CPMenuItemSubmenuKeyD;K;6;CP$UIDd;2;57E;
-  K;17;CPMenuItemMenuKeyD;K;6;CP$UIDd;2;54E;
-  K;38;CPMenuItemKeyEquivalentModifierMaskKeyD;K;6;CP$UIDd;3;173E;
-E;
-```
+**v2.0 Compiler Requirement:** The Lisette serializer must intern strings. A map from string value to `$objects` index must be maintained during the build pass to ensure compact output.
 
 ---
 
-## String interning
+# v2.0 Blind Transpiler Schema
 
-Identical strings share a single entry in `$objects` and are referenced
-by CP$UID throughout the archive. This applies to:
+The new Lisette compiler acts as a strict 1:1 mirror of the input XML structure. It possesses zero semantic knowledge of AppKit. The following rules define how XML concepts map to the 280NPLIST wire format:
 
-- Selector strings (action names)
-- Class names
-- Menu item titles
-- Key names used as values (not as dictionary keys — those are inline)
-
-In the reference CIB, commonly repeated strings such as empty string
-(`S;0;`), separator title (`S;0;`), and boolean-like values appear once
-and are referenced many times.
-
-The serializer must intern strings. A map from string value to
-`$objects` index is maintained during the build pass.
+1. **Root Entry (`$top`):** The `$top` dictionary contains a single key (e.g., `root`) pointing to the `CP$UID` of the root `<document>` element. The compiler does not fabricate a `_CPCibObjectData` shell.
+2. **Class Names:** The `$classname` and `$classes` array are populated verbatim with the lowercase XIB tag name (e.g., `$classname = "menu"`, `$classname = "document"`). The runtime's `mapNativeToCapp:` is responsible for mapping `"menu"` to `[CPMenu class]`.
+3. **Attribute Typing:** All XML attribute values are serialized as `S` (String) tokens. The compiler performs no lexical type inference (e.g., it does not emit `d` for numbers or `T`/`F` for booleans). The runtime is responsible for parsing strings into integers, floats, or booleans as needed.
+4. **Object Topology:** Containment references (an `id`-bearing element inside another element) are encoded as standard `CP$UID` references. The local key used in the instance dictionary is either the child's `key` attribute or the wrapper element's tag name.
 
 ---
 
-## $top dictionary
+# Legacy v1.0 Schema Reference
 
-The entry point for a CIB archive:
+*Note: The following structures are produced by the legacy semantic `nib2cib` tool. The new v2.0 blind transpiler will NOT generate these exact structures. This section is preserved strictly as a reference for the Cappuccino runtime team to understand v1.0 backward compatibility.*
 
+## v1.0 $top Dictionary
+The entry point for a v1.0 CIB archive:
 ```
 K;4;$top
 D;
@@ -225,175 +114,24 @@ D;
   D;K;6;CP$UIDd;1;2E;
 E;
 ```
+References the `_CPCibObjectData` instance in the object table.
 
-The single entry `CPCibObjectDataKey` references the
-`_CPCibObjectData` instance in the object table (index 2 in the
-reference archive).
+## v1.0 _CPCibObjectData
+The root object of a v1.0 archive. Holds top-level collections read by `CPCib`.
+Keys include: `_CPCibObjectDataNamesKeysKey`, `_CPCibObjectDataConnectionsKey`, `_CPCibObjectDataObjectsKeysKey`, `_CPCibObjectDataFileOwnerKey`, `_CPCibObjectDataVisibleWindowsKey`, etc.
 
----
-
-## _CPCibObjectData
-
-This is the root object of a CIB archive. It holds all the top-level
-collections that `CPCib` reads when loading the archive.
-
-Known keys (from the reference CIB and Cappuccino source):
-
-| Key                               | Type       | Purpose                             |
-|-----------------------------------|------------|-------------------------------------|
-| `_CPCibObjectDataNamesKeysKey`    | Array      | Names for named objects             |
-| `_CPCibObjectDataNamesValuesKey`  | Array      | Objects corresponding to names      |
-| `_CPCibObjectDataClassesKeysKey`  | Array      | (class mapping keys, may be empty)  |
-| `_CPCibObjectDataClassesValuesKey`| Array      | (class mapping values, may be empty)|
-| `_CPCibObjectDataConnectionsKey`  | Array      | All outlet/action connectors        |
-| `_CPCibObjectDataFrameworkKey`    | (empty)    | Framework name, usually empty       |
-| `_CPCibObjectDataNextOidKey`      | Number     | Next object ID                      |
-| `_CPCibObjectDataObjectsKeysKey`  | Array      | Object table keys (oids)            |
-| `_CPCibObjectDataObjectsValuesKey`| Array      | Object table values                 |
-| `_CPCibObjectDataOidKeysKey`      | Array      | OID → object map keys               |
-| `_CPCibObjectDataOidValuesKey`    | Array      | OID → object map values             |
-| `_CPCibObjectDataFileOwnerKey`    | CP$UID ref | The File's Owner proxy object       |
-| `_CPCibObjectDataVisibleWindowsKey`| Array     | Windows to show on load             |
-
----
-
-## Connectors
-
+## v1.0 Connectors
 ### Outlet connector (`CPCibOutletConnector`)
-
-```
-D;
-  K;6;$classD;K;6;CP$UID<class-ref>E;
-  K;24;_CPCibConnectorSourceKeyD;K;6;CP$UID<src>E;
-  K;29;_CPCibConnectorDestinationKeyD;K;6;CP$UID<dst>E;
-  K;23;_CPCibConnectorLabelKeyD;K;6;CP$UID<label>E;
-E;
-```
-
-Label is the outlet property name (e.g. `delegate`, `theWindow`).
-
+Keys: `_CPCibConnectorSourceKey`, `_CPCibConnectorDestinationKey`, `_CPCibConnectorLabelKey`.
 ### Action connector (`CPCibControlConnector`)
+Same structure. Label is the selector string.
 
-Same structure. Label is the selector string (e.g.
-`takeDoubleValueFrom:`).
-
----
-
-## Geometry encoding
-
-Rects, sizes, and points are encoded as JSON strings:
-
-```
-S;56;{"origin":{"x":0,"y":1},"size":{"width":96,"height":21}}
-S;22;{{0, 0}, {1920, 1057}}
-```
-
-Both formats appear in the reference CIB. The JSON object format
-(`{"origin":…,"size":…}`) is used for view frames and bounds. The
-compact format (`{{x, y}, {w, h}}`) is used for window and screen
-rects. The serializer must match these formats exactly as the runtime
-parser expects them.
-
-The Go `encoding/json` package is suitable for producing the JSON
-object format. The compact format is a simple `fmt.Sprintf`.
-
----
-
-## CPFont encoding
-
-```
-D;
-  K;6;$classD;K;6;CP$UID<class-ref>E;
-  K;13;CPFontNameKeyS;<n>;<name>
-  K;13;CPFontSizeKeyd;<n>;<size>
-  K;15;CPFontIsBoldKey<T|F>
-  K;17;CPFontIsItalicKey<T|F>
-  K;17;CPFontIsSystemKey<T|F>
-  K;19;CPViewThemeClassKeyD;K;6;CP$UID<ref>E;
-  K;19;CPViewThemeStateKeyD;K;6;CP$UID<ref>E;
-E;
-```
-
-System font placeholder name: `_CPFontSystemFacePlaceholder` (28 bytes).
-
----
-
-## _CPThemeAttribute encoding
-
-Theme attributes appear as inline dictionaries on controls. They encode
-per-state values for theme-driven attributes such as `font`,
-`line-break-mode`, and `alignment`.
-
-```
-D;
-  K;6;$classD;K;6;CP$UID<_CPThemeAttribute-class>E;
-  K;4;nameD;K;6;CP$UID<attribute-name-string>E;
-  K;12;defaultValueD;K;6;CP$UID<value>E;
-  K;6;valuesD;K;6;CP$UID<CPDictionary>E;
-E;
-```
-
-The `values` dictionary is a `CPDictionary` (not a raw dict) with
-theme state keys (`normal`, `tableDataView`, etc.) mapped to values.
-
----
-
-## CPColor encoding
-
-```
-D;
-  K;6;$classD;K;6;CP$UID<CPColor-class>E;
-  K;20;CPColorComponentsKeyD;K;6;CP$UID<array-of-components>E;
-  K;19;CPViewThemeClassKeyD;K;6;CP$UID<ref>E;
-  K;19;CPViewThemeStateKeyD;K;6;CP$UID<ref>E;
-E;
-```
-
-Components are an array of four numbers (RGBA, 0.0–1.0) or a named
-color string when the XIB uses a catalog color.
-
----
-
-## CPTrackingArea encoding
-
-Tracking areas appear on interactive controls. Keys:
-
-| Key                               | Type   |
-|-----------------------------------|--------|
-| `CPTrackinkAreaViewRectKey`       | String (geometry) |
-| `CPTrackingAreaOptionsKey`        | Number |
-| `CPTrackingAreaOwnerKey`          | CP$UID |
-| `CPTrackingAreaUserInfoKey`       | CP$UID (null) |
-| `CPTrackingAreaReferencingViewKey`| CP$UID |
-| `CPTrackingAreaWindowRect`        | String (geometry) |
-
-Note: `CPTrackinkAreaViewRectKey` has a typo (`Trakin` not `Tracking`)
-that is present in the Cappuccino source and must be preserved exactly.
-
----
-
-## _CPKeyedArchiverValue
-
-A boxed scalar used to encode primitive values (integers, floats) that
-cannot be stored directly as dictionary values in the CP keyed archive.
-
-```
-D;
-  K;6;$classD;K;6;CP$UID<_CPKeyedArchiverValue-class>E;
-  K;15;CPValueValueKeyd;<n>;<value>
-E;
-```
-
----
+## v1.0 Specific Encodings
+- **Geometry:** Encoded as JSON strings (`{"origin":...}`) or compact strings (`{{x,y},{w,h}}`).
+- **CPFont:** Encoded via `CPFontNameKey`, `CPFontSizeKey`, etc.
+- **CPColor:** Encoded via `CPColorComponentsKey` (Array of RGBA numbers).
+- **_CPKeyedArchiverValue:** A boxed scalar used to encode primitive values that cannot be stored directly.
+- **Typo Preservation:** `CPTrackinkAreaViewRectKey` has a typo present in the Cappuccino source that must be preserved by the runtime.
 
 ## Validation
-
-The output CIB is valid if:
-
-1. The Cappuccino runtime can load it via `CPCib` without error.
-2. The resulting UI matches the source XIB visually and functionally.
-
-The reference pair (`MainMenu.xib` / `MainMenu.cib`) in
-`toolchain_reference/Resources/` is the ground truth for output
-validation. Byte-identical output is not required; functionally
-equivalent output is.
+The reference pair (`MainMenu.xib` / `MainMenu.cib`) in `toolchain_reference/Resources/` is the ground truth for v1.0 output validation. For v2.0, output is valid if the Cappuccino 2.0 runtime can load it via `CPCib` without error and apply `mapNativeToCapp:` successfully.

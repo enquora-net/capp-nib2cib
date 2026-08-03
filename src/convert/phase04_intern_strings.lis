@@ -7,20 +7,94 @@
 //
 // TargetPhase: InternStrings
 //
-// Stub. Runs once per target, concurrently with every other target's
-// worker. Will intern the flattened object table's string values into a
-// deduplicated string pool ahead of UID resolution. The pool is scoped to
-// this one target's CIB, not shared across the batch — targets have no
-// shared state anywhere in this pipeline.
+// Walks the flattened object table from FlattenObjectGraph and collects
+// every distinct value member's content into one deduplicated pool,
+// scoped to this one target — pools are never shared across targets, same
+// as every other TargetContext field.
+//
+// FlattenObjectGraph now classifies every attribute and every child as a
+// FlatMember: either a reference (target_id: Some) or a plain value
+// (value: Some). This phase only walks the value side — a reference is
+// resolved to a position in the object table, not pooled as a string; that
+// separation is what FlattenObjectGraph's own fix (attrs field removed,
+// target/destination attributes classified as references) makes correct
+// here. Before that fix, this phase pooled reference id text
+// (target="-1", destination="450") as if it were content — it no longer
+// can, since references never reach this phase as members with `value`
+// set.
+//
+// This phase does not rewrite the object graph to reference the pool by
+// index — it only builds the pool. Substituting a value for its pool index
+// is a downstream concern (resolve-uid-references or emit-capp2plist),
+// consistent with single-concern-per-phase.
 //
 // **
 import "go:fmt"
 
 pub struct InternStringsResult {
   pub diags: Slice<Diagnostic>,
+  // Unique strings, insertion (first-seen) order — not sorted, not
+  // semantically ordered.
+  pub pool: Slice<string>,
+}
+
+// intern adds s to pool if not already present. Linear scan: XIB string
+// counts are in the dozens to low hundreds, so an O(n) membership check
+// per insert is not worth trading for a Map-based dedup this codebase
+// hasn't exercised anywhere yet.
+fn intern(pool: Ref<Slice<string>>, s: string) {
+  for existing in pool.* {
+    if existing == s { return }
+  }
+  pool.* = pool.*.append(s)
+}
+
+// collect_from_node walks a value subtree (a FlatMember.value — either a
+// single-attribute node or an embedded element subtree, per
+// FlattenObjectGraph) and interns every attribute value and every
+// non-empty text content found, at any depth. total counts every
+// occurrence considered, interned or not, for the dedup-ratio status line
+// below.
+fn collect_from_node(
+  node: Ref<XibNode>,
+  pool: Ref<Slice<string>>,
+  total: Ref<int>,
+) {
+  for a in node.attrs {
+    total.* += 1
+    intern(pool, a.value)
+  }
+  if node.text != "" {
+    total.* += 1
+    intern(pool, node.text)
+  }
+  for c in node.children {
+    collect_from_node(&c, pool, total)
+  }
 }
 
 pub fn run_intern_strings(ctx: Ref<TargetContext>) -> Result<InternStringsResult, error> {
-  fmt.Println(f"○  intern-strings: stub — {ctx.target.xib_path}")
-  Ok(InternStringsResult { diags: [] })
+  let Some(flattened) = ctx.flattened else {
+    return Ok(
+      InternStringsResult {
+        diags: [diag_error("intern strings", "FlattenObjectGraph has not run")],
+        pool: [],
+      },
+    )
+  }
+
+  let mut pool: Slice<string> = []
+  let mut total = 0
+  for obj in flattened.objects {
+    for m in obj.members {
+      if let Some(v) = m.value { collect_from_node(&v, &pool, &total) }
+    }
+  }
+
+  if !ctx.config.quiet {
+    fmt.Println(
+      f"\u{2713}  intern-strings: {ctx.target.xib_path} ({pool.length()} unique of {total} string(s))",
+    )
+  }
+  Ok(InternStringsResult { diags: [], pool })
 }

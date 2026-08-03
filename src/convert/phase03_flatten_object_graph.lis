@@ -10,39 +10,54 @@
 // Flattens the XibNode tree from ParseXibXml into a flat table of
 // FlattenedObject rows, one per id-bearing element anywhere in the tree,
 // regardless of nesting depth. Per README.md's architecture: this tool has
-// zero semantic knowledge of AppKit, so this phase reads exactly two
-// structural facts about each element — whether it carries an id
-// attribute, and whether it carries a key attribute — and nothing else. It
-// never reads what a tag name or attribute means.
+// zero semantic knowledge of AppKit — it never reads a tag name or an
+// attribute's meaning to decide anything.
 //
-// Presence of id is XIB's own generic object-identity mechanism (see
-// XIB-FORMAT.md's "Object identity" section) — using it is not semantic
-// interpretation of any particular class. The rest of XIB-FORMAT.md (NS to
-// CP class mapping, style mask bit values, per-element attribute tables) is
-// legacy semantic-interpreter material from the prototype and is
-// deliberately NOT used here; that mapping belongs to the Cappuccino 2.0
-// runtime's mapNativeToCapp:, not to this tool.
+// Every attribute and every child of an id-bearing object becomes exactly
+// one FlatMember, with no separate unguarded bucket alongside it. A member
+// is one of two things:
+//   - a reference (target_id: Some) to another row in the table
+//   - an embedded plain value (value: Some) — data, not identity
 //
-// Elements without an id are transparent grouping wrappers when they have
-// id-bearing descendants (e.g. a <menu>'s <items> wrapping several
-// <menuItem id="...">), and plain embedded values otherwise (e.g. <rect>,
-// <font>). Both cases fall out of the same rule — recurse through any
-// non-id element — rather than needing to special-case which wrapper tags
-// exist.
+// Two, and only two, structural signals decide which:
+//   - id presence: a child ELEMENT that carries its own id is a reference
+//     to that element's own row (a containment reference).
+//   - a small fixed set of ATTRIBUTE names — target, destination — whose
+//     value equals another element's id anywhere in the document (a
+//     cross-reference, e.g. <action target="-2" .../>). This set comes
+//     from the XIB connection grammar itself (<outlet>/<action> elements),
+//     not from any AppKit class knowledge.
+//
+// Per v2.0 Schema: Containment references use a single local key (the
+// child's `key` attribute or the wrapper element's tag name). Deep path
+// accumulation is not required. The root <document> element is forcibly
+// registered as the root object of the flat table.
 //
 // **
 import "go:fmt"
 
+// reference_attrs: the only attribute names treated as carrying a
+// reference to another element's id, per the XIB connection grammar.
+fn reference_attrs() -> Slice<string> {
+  ["target", "destination"]
+}
+
+fn is_reference_attr(name: string) -> bool {
+  for r in reference_attrs() {
+    if r == name { return true }
+  }
+  false
+}
+
 pub struct FlatMember {
-  // Labels (a key attribute, or a tag name when no key is present) of the
-  // element chain from the owning object down to this member. Usually one
-  // label; more when non-id wrapper elements were passed through to reach
-  // it; empty for a direct id-bearing child with neither its own key.
-  pub path: Slice<string>,
+  // The immediate key attribute, or the wrapper/child tag name.
+  pub key: string,
   // Some(id): this member is a reference to another row in the flat table.
   // None: this member is an embedded plain value (see `value`).
   pub target_id: Option<string>,
-  // Present only when target_id is None: the raw, uninterpreted subtree.
+  // Present only when target_id is None: the raw, uninterpreted subtree —
+  // or, for a plain attribute, a single-node XibNode carrying just that
+  // attribute's value as text.
   pub value: Option<XibNode>,
 }
 
@@ -52,9 +67,6 @@ pub struct FlattenedObject {
   // This object's own key attribute — how its parent names it. None for a
   // top-level object under <objects>, which has no parent of its own.
   pub key: Option<string>,
-  // This object's own attributes, minus id and key (those are pulled into
-  // dedicated fields above, not duplicated here).
-  pub attrs: Slice<XibAttr>,
   pub members: Slice<FlatMember>,
 }
 
@@ -72,56 +84,82 @@ fn find_attr(node: Ref<XibNode>, key: string) -> Option<string> {
   None
 }
 
-// flatten_into registers node (which must be id-bearing — callers only
-// invoke this after confirming that) as its own row in table, recursively
+// attr_members converts every attribute of node (minus id and key, which
+// are pulled into FlattenedObject's own dedicated fields) into FlatMembers
+// — a reference for target/destination, a plain value otherwise.
+fn attr_members(node: Ref<XibNode>) -> Slice<FlatMember> {
+  let mut members: Slice<FlatMember> = []
+  for a in node.attrs {
+    if a.key == "id" || a.key == "key" { continue }
+    if is_reference_attr(a.key) {
+      members = members.append(
+        FlatMember { key: a.key, target_id: Some(a.value), value: None },
+      )
+    } else {
+      members = members.append(
+        FlatMember {
+          key: a.key,
+          target_id: None,
+          value: Some(
+            XibNode { tag: a.key, attrs: [], children: [], text: a.value },
+          ),
+        },
+      )
+    }
+  }
+  members
+}
+
+// flatten_into registers node as its own row in table, recursively
 // flattening everything reachable below it first.
 fn flatten_into(node: Ref<XibNode>, table: Ref<Slice<FlattenedObject>>) {
   let id = find_attr(node, "id").unwrap_or("")
   let key = find_attr(node, "key")
-  let attrs = node.attrs.filter(|a| a.key != "id" && a.key != "key")
-  let members = walk_children(&node.children, [], table)
-  table.* = table.*.append(
-    FlattenedObject { id, tag: node.tag, key, attrs, members },
-  )
+  let mut members = attr_members(node)
+  let child_members = walk_children(&node.children, table)
+  for m in child_members {
+    members = members.append(m)
+  }
+  table.* = table.*.append(FlattenedObject { id, tag: node.tag, key, members })
 }
 
 // walk_children produces the member list for whichever object is calling
-// it (the object owning `children`), while also registering every
-// id-bearing element found — at any depth, through any number of
-// transparent non-id wrappers — as its own row in table via flatten_into.
-// path accumulates wrapper labels as non-id elements are passed through.
+// it, while also registering every id-bearing element found as its own 
+// row in table via flatten_into.
 fn walk_children(
   children: Ref<Slice<XibNode>>,
-  path: Slice<string>,
   table: Ref<Slice<FlattenedObject>>,
 ) -> Slice<FlatMember> {
   let mut members: Slice<FlatMember> = []
   for child in children.* {
     match find_attr(&child, "id") {
       Some(child_id) => {
-        let child_path = find_attr(&child, "key").map_or(path, |k| path.append(
-          k,
-        ))
+        // Direct id-bearing child: it's a containment reference.
+        let key = find_attr(&child, "key").unwrap_or(child.tag)
         members = members.append(
-          FlatMember {
-            path: child_path,
-            target_id: Some(child_id),
-            value: None,
-          },
+          FlatMember { key, target_id: Some(child_id), value: None },
         )
         flatten_into(&child, table)
       },
       None => {
-        let label = find_attr(&child, "key").unwrap_or(child.tag)
-        let child_path = path.append(label)
-        let deeper = walk_children(&child.children, child_path, table)
+        // Non-id child: could be a wrapper (<subviews>) or a plain value (<rect>).
+        let wrapper_key = find_attr(&child, "key").unwrap_or(child.tag)
+        let deeper = walk_children(&child.children, table)
         if deeper.is_empty() {
+          // It's a plain value. The member's key is the child's key or tag.
           members = members.append(
-            FlatMember { path: child_path, target_id: None, value: Some(child) },
+            FlatMember { key: wrapper_key, target_id: None, value: Some(child) },
           )
         } else {
+          // It's a wrapper. Pass through and assign the wrapper's key/tag
+          // to the id-bearing children found inside it.
           for m in deeper {
-            members = members.append(m)
+            let m_with_key = FlatMember {
+              key: wrapper_key,
+              target_id: m.target_id,
+              value: m.value,
+            }
+            members = members.append(m_with_key)
           }
         }
       },
@@ -130,10 +168,6 @@ fn walk_children(
   members
 }
 
-// count and status helpers, mirroring the convention established in
-// resolve_project_paths.lis and phase02_parse_xib_xml.lis: a real
-// (non-stub) phase's success or failure must be visible to the user, not
-// silent.
 pub fn run_flatten_object_graph(ctx: Ref<TargetContext>) -> Result<FlattenObjectGraphResult, error> {
   let Some(parsed) = ctx.parsed else {
     return Ok(
@@ -153,7 +187,18 @@ pub fn run_flatten_object_graph(ctx: Ref<TargetContext>) -> Result<FlattenObject
   }
 
   let mut table: Slice<FlattenedObject> = []
-  let _ = walk_children(&tree.children, [], &table)
+
+  // Per v2.0 Schema: The root <document> element must be the root object in the table.
+  // Since <document> lacks an `id` attribute, we force register it with id="document".
+  let doc_members = walk_children(&tree.children, &table)
+  table = table.append(
+    FlattenedObject {
+      id: "document",
+      tag: tree.tag,
+      key: None,
+      members: doc_members,
+    },
+  )
 
   if table.is_empty() {
     if !ctx.config.quiet {

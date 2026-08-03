@@ -244,6 +244,9 @@ fn execute_targets(targets: Slice<ConvertTarget>, cfg: ConvertConfig) -> Slice<T
     }
   }
 
+  // TODO: The `received` counter currently increments even if `results_ch.receive()`
+  // returns None. This can cause the loop to terminate early and drop target results.
+  // Defer fix: update to only increment `received` inside a `Some(r)` match arm.
   let mut results: Slice<TargetResult> = []
   let mut received = 0
   while received < targets.length() {
