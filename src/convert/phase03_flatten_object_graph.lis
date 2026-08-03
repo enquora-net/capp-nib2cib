@@ -36,8 +36,6 @@
 // **
 import "go:fmt"
 
-// reference_attrs: the only attribute names treated as carrying a
-// reference to another element's id, per the XIB connection grammar.
 fn reference_attrs() -> Slice<string> {
   ["target", "destination"]
 }
@@ -50,30 +48,20 @@ fn is_reference_attr(name: string) -> bool {
 }
 
 pub struct FlatMember {
-  // The immediate key attribute, or the wrapper/child tag name.
   pub key: string,
-  // Some(id): this member is a reference to another row in the flat table.
-  // None: this member is an embedded plain value (see `value`).
   pub target_id: Option<string>,
-  // Present only when target_id is None: the raw, uninterpreted subtree —
-  // or, for a plain attribute, a single-node XibNode carrying just that
-  // attribute's value as text.
   pub value: Option<XibNode>,
 }
 
 pub struct FlattenedObject {
   pub id: string,
   pub tag: string,
-  // This object's own key attribute — how its parent names it. None for a
-  // top-level object under <objects>, which has no parent of its own.
   pub key: Option<string>,
   pub members: Slice<FlatMember>,
 }
 
 pub struct FlattenObjectGraphResult {
   pub diags: Slice<Diagnostic>,
-  // Discovery order (document order via traversal), not any semantic
-  // ordering.
   pub objects: Slice<FlattenedObject>,
 }
 
@@ -84,9 +72,6 @@ fn find_attr(node: Ref<XibNode>, key: string) -> Option<string> {
   None
 }
 
-// attr_members converts every attribute of node (minus id and key, which
-// are pulled into FlattenedObject's own dedicated fields) into FlatMembers
-// — a reference for target/destination, a plain value otherwise.
 fn attr_members(node: Ref<XibNode>) -> Slice<FlatMember> {
   let mut members: Slice<FlatMember> = []
   for a in node.attrs {
@@ -110,57 +95,80 @@ fn attr_members(node: Ref<XibNode>) -> Slice<FlatMember> {
   members
 }
 
-// flatten_into registers node as its own row in table, recursively
-// flattening everything reachable below it first.
-fn flatten_into(node: Ref<XibNode>, table: Ref<Slice<FlattenedObject>>) {
+fn flatten_into(
+  node: Ref<XibNode>,
+  table: Ref<Slice<FlattenedObject>>,
+  next_array_id: Ref<int>,
+) {
   let id = find_attr(node, "id").unwrap_or("")
   let key = find_attr(node, "key")
   let mut members = attr_members(node)
-  let child_members = walk_children(&node.children, table)
+  let child_members = walk_children(&node.children, table, next_array_id)
   for m in child_members {
     members = members.append(m)
   }
   table.* = table.*.append(FlattenedObject { id, tag: node.tag, key, members })
 }
 
-// walk_children produces the member list for whichever object is calling
-// it, while also registering every id-bearing element found as its own 
-// row in table via flatten_into.
 fn walk_children(
   children: Ref<Slice<XibNode>>,
   table: Ref<Slice<FlattenedObject>>,
+  next_array_id: Ref<int>,
 ) -> Slice<FlatMember> {
   let mut members: Slice<FlatMember> = []
   for child in children.* {
     match find_attr(&child, "id") {
       Some(child_id) => {
-        // Direct id-bearing child: it's a containment reference.
         let key = find_attr(&child, "key").unwrap_or(child.tag)
         members = members.append(
           FlatMember { key, target_id: Some(child_id), value: None },
         )
-        flatten_into(&child, table)
+        flatten_into(&child, table, next_array_id)
       },
       None => {
-        // Non-id child: could be a wrapper (<subviews>) or a plain value (<rect>).
         let wrapper_key = find_attr(&child, "key").unwrap_or(child.tag)
-        let deeper = walk_children(&child.children, table)
-        if deeper.is_empty() {
-          // It's a plain value. The member's key is the child's key or tag.
+
+        // Check if this wrapper contains id-bearing children (i.e., it's an array)
+        let mut has_id_children = false
+        for inner in child.children {
+          if find_attr(&inner, "id").is_some() {
+            has_id_children = true
+            break
+          }
+        }
+
+        if has_id_children {
+          // Synthesize an array object to maintain valid dictionary keys
+          let array_id = f"__array_{next_array_id.*}"
+          next_array_id.* += 1
+
+          let array_members = walk_children(
+            &child.children,
+            table,
+            next_array_id,
+          )
+
+          table.* = table.*.append(
+            FlattenedObject {
+              id: array_id,
+              tag: "array",
+              key: None,
+              members: array_members,
+            },
+          )
+
+          members = members.append(
+            FlatMember {
+              key: wrapper_key,
+              target_id: Some(array_id),
+              value: None,
+            },
+          )
+        } else {
+          // It's a plain value.
           members = members.append(
             FlatMember { key: wrapper_key, target_id: None, value: Some(child) },
           )
-        } else {
-          // It's a wrapper. Pass through and assign the wrapper's key/tag
-          // to the id-bearing children found inside it.
-          for m in deeper {
-            let m_with_key = FlatMember {
-              key: wrapper_key,
-              target_id: m.target_id,
-              value: m.value,
-            }
-            members = members.append(m_with_key)
-          }
         }
       },
     }
@@ -187,10 +195,9 @@ pub fn run_flatten_object_graph(ctx: Ref<TargetContext>) -> Result<FlattenObject
   }
 
   let mut table: Slice<FlattenedObject> = []
+  let mut next_array_id = 1
 
-  // Per v2.0 Schema: The root <document> element must be the root object in the table.
-  // Since <document> lacks an `id` attribute, we force register it with id="document".
-  let doc_members = walk_children(&tree.children, &table)
+  let doc_members = walk_children(&tree.children, &table, &next_array_id)
   table = table.append(
     FlattenedObject {
       id: "document",

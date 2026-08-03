@@ -67,6 +67,17 @@ fn emit_object(b: Ref<strings.Builder>, obj: ArchiveObject) {
       }
       b.WriteString("E;")
     },
+    ArchiveObject.Array { class_uid, uids } => {
+      b.WriteString("D;")
+      emit_key(b, "$class")
+      emit_uid_ref(b, class_uid)
+      emit_key(b, "CP.objects")
+      b.WriteString("A;")
+      for uid in uids {
+        emit_uid_ref(b, uid)
+      }
+      b.WriteString("E;E;")
+    },
   }
 }
 
@@ -81,20 +92,15 @@ pub fn run_emit_280nplist(ctx: Ref<TargetContext>) -> Result<Emit280nPlistResult
 
   let mut b = strings.Builder {}
 
-  // Header
   b.WriteString("280NPLIST;2.0;")
-
-  // Root Dictionary
   b.WriteString("D;")
 
-  // $top
   emit_key(&b, "$top")
   b.WriteString("D;")
   emit_key(&b, "root")
   emit_uid_ref(&b, archive.root_uid)
   b.WriteString("E;")
 
-  // $objects
   emit_key(&b, "$objects")
   b.WriteString("A;")
   for obj in archive.objects {
@@ -102,16 +108,11 @@ pub fn run_emit_280nplist(ctx: Ref<TargetContext>) -> Result<Emit280nPlistResult
   }
   b.WriteString("E;")
 
-  // $archiver
   emit_key(&b, "$archiver")
   b.WriteString("S;15;CPKeyedArchiver")
-
-  // End Root Dictionary
   b.WriteString("E;")
 
   let output = b.String()
-
-  // Write to file
   os.WriteFile(ctx.target.cib_path, output as Slice<byte>, 0o644)?
 
   if !ctx.config.quiet {

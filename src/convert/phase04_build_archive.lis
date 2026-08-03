@@ -19,6 +19,7 @@ pub enum ArchiveObject {
   String(string),
   Class { name: string, classes: Slice<string> },
   Instance { class_uid: int, members: Slice<ArchiveMember> },
+  Array { class_uid: int, uids: Slice<int> },
 }
 
 pub struct ArchiveMember {
@@ -138,23 +139,34 @@ pub fn run_build_archive(ctx: Ref<TargetContext>) -> Result<BuildArchiveResult, 
 
   // Pass 2: Populate the instances, interning strings and classes.
   let mut idx = 1
-  // Start at 1 to skip the $null sentinel at index 0
   for obj in flattened.objects {
     let class_uid = (&builder).intern_class(obj.tag)
-    let mut members: Slice<ArchiveMember> = []
 
-    for m in obj.members {
-      let val_uid = if let Some(id) = m.target_id {
-        find_object_uid(builder.object_uids, id).unwrap_or(0)
-      } else if let Some(v) = m.value {
-        (&builder).serialize_value(&v)
-      } else {
-        0
+    if obj.tag == "array" {
+      let mut uids: Slice<int> = []
+      for m in obj.members {
+        let val_uid = if let Some(id) = m.target_id {
+          find_object_uid(builder.object_uids, id).unwrap_or(0)
+        } else {
+          0
+        }
+        uids = uids.append(val_uid)
       }
-      members = members.append(ArchiveMember { key: m.key, uid: val_uid })
+      builder.objects[idx] = ArchiveObject.Array { class_uid, uids }
+    } else {
+      let mut members: Slice<ArchiveMember> = []
+      for m in obj.members {
+        let val_uid = if let Some(id) = m.target_id {
+          find_object_uid(builder.object_uids, id).unwrap_or(0)
+        } else if let Some(v) = m.value {
+          (&builder).serialize_value(&v)
+        } else {
+          0
+        }
+        members = members.append(ArchiveMember { key: m.key, uid: val_uid })
+      }
+      builder.objects[idx] = ArchiveObject.Instance { class_uid, members }
     }
-
-    builder.objects[idx] = ArchiveObject.Instance { class_uid, members }
     idx += 1
   }
 
