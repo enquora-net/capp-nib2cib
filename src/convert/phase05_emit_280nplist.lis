@@ -2,6 +2,9 @@
 // convert/phase05_emit_280nplist.lis
 // capp-nib2cib
 //
+// Created by David Richardson on Thursday, July 30, 2026.
+// Copyright (c) 2026 David Richardson. All rights reserved.
+//
 // TargetPhase: Emit280nPlist
 //
 // Serializes the ArchiveGraph (the $objects array) into the 280NPLIST

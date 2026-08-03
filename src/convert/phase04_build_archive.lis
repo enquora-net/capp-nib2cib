@@ -2,6 +2,9 @@
 // convert/phase04_build_archive.lis
 // capp-nib2cib
 //
+// Created by David Richardson on Thursday, July 30, 2026.
+// Copyright (c) 2026 David Richardson. All rights reserved.
+//
 // TargetPhase: BuildArchive
 //
 // Consumes the FlattenedObject table and builds the 280NPLIST $objects
