@@ -1,0 +1,121 @@
+//**
+// convert/phase05_emit_280nplist.lis
+// capp-nib2cib
+//
+// TargetPhase: Emit280nPlist
+//
+// Serializes the ArchiveGraph (the $objects array) into the 280NPLIST
+// v2.0 text format and writes it to the target .cib file.
+//
+// **
+import "go:fmt"
+import "go:os"
+import "go:strings"
+
+pub struct Emit280nPlistResult {
+  pub diags: Slice<Diagnostic>,
+}
+
+fn emit_key(b: Ref<strings.Builder>, key: string) {
+  b.WriteString(f"K;{key.length()};{key}")
+}
+
+fn emit_string(b: Ref<strings.Builder>, val: string) {
+  b.WriteString(f"S;{val.length()};{val}")
+}
+
+fn emit_number(b: Ref<strings.Builder>, val: int) {
+  let s = f"{val}"
+  b.WriteString(f"d;{s.length()};{s}")
+}
+
+fn emit_uid_ref(b: Ref<strings.Builder>, uid: int) {
+  b.WriteString("D;K;6;CP$UID")
+  emit_number(b, uid)
+  b.WriteString("E;")
+}
+
+fn emit_object(b: Ref<strings.Builder>, obj: ArchiveObject) {
+  match obj {
+    ArchiveObject.Null => {
+      b.WriteString("S;5;$null")
+    },
+    ArchiveObject.String(s) => {
+      emit_string(b, s)
+    },
+    ArchiveObject.Class { name, classes } => {
+      b.WriteString("D;")
+      emit_key(b, "$classname")
+      emit_string(b, name)
+      emit_key(b, "$classes")
+      b.WriteString("A;")
+      for c in classes {
+        emit_string(b, c)
+      }
+      b.WriteString("E;E;")
+    },
+    ArchiveObject.Instance { class_uid, members } => {
+      b.WriteString("D;")
+      emit_key(b, "$class")
+      emit_uid_ref(b, class_uid)
+      for m in members {
+        emit_key(b, m.key)
+        emit_uid_ref(b, m.uid)
+      }
+      b.WriteString("E;")
+    },
+  }
+}
+
+pub fn run_emit_280nplist(ctx: Ref<TargetContext>) -> Result<Emit280nPlistResult, error> {
+  let Some(archive) = ctx.archive else {
+    return Ok(
+      Emit280nPlistResult {
+        diags: [diag_error("emit 280nplist", "BuildArchive has not run")],
+      },
+    )
+  }
+
+  let mut b = strings.Builder {}
+
+  // Header
+  b.WriteString("280NPLIST;2.0;\n")
+
+  // Root Dictionary
+  b.WriteString("D;")
+
+  // $top
+  emit_key(&b, "$top")
+  b.WriteString("D;")
+  emit_key(&b, "root")
+  emit_uid_ref(&b, archive.root_uid)
+  b.WriteString("E;")
+
+  // $objects
+  emit_key(&b, "$objects")
+  b.WriteString("A;")
+  for obj in archive.objects {
+    emit_object(&b, obj)
+  }
+  b.WriteString("E;")
+
+  // $archiver
+  emit_key(&b, "$archiver")
+  b.WriteString("S;15;CPKeyedArchiver")
+
+  // End Root Dictionary
+  b.WriteString("E;")
+
+  let output = b.String()
+
+  // Write to file
+  os.WriteFile(ctx.target.cib_path, output as Slice<byte>, 0o644)?
+
+  if !ctx.config.quiet {
+    fmt.Println(
+      f"\u{2713}  emit-280nplist: {ctx.target.cib_path} ({output.length()} bytes)",
+    )
+  }
+
+  Ok(Emit280nPlistResult { diags: [] })
+}

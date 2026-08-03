@@ -58,9 +58,8 @@ import "go:strings"
 pub enum TargetPhase {
   ParseXibXml,
   FlattenObjectGraph,
-  InternStrings,
-  ResolveUidReferences,
-  EmitCapp2Plist,
+  BuildArchive,
+  Emit280nPlist,
 }
 
 // Adding a variant to TargetPhase without a corresponding arm here is a
@@ -76,16 +75,12 @@ impl TargetPhase {
         ctx.flattened = Some(run_flatten_object_graph(ctx)?)
         Ok(())
       },
-      InternStrings => {
-        ctx.interned = Some(run_intern_strings(ctx)?)
+      BuildArchive => {
+        ctx.archive = Some(run_build_archive(ctx)?)
         Ok(())
       },
-      ResolveUidReferences => {
-        ctx.resolved = Some(run_resolve_uid_references(ctx)?)
-        Ok(())
-      },
-      EmitCapp2Plist => {
-        ctx.emitted = Some(run_emit_capp2plist(ctx)?)
+      Emit280nPlist => {
+        ctx.emitted = Some(run_emit_280nplist(ctx)?)
         Ok(())
       },
     }
@@ -96,9 +91,8 @@ fn target_phase_name(phase: TargetPhase) -> string {
   match phase {
     ParseXibXml => "parse XIB XML",
     FlattenObjectGraph => "flatten object graph",
-    InternStrings => "intern strings",
-    ResolveUidReferences => "resolve UID references",
-    EmitCapp2Plist => "emit CAPP2PLIST",
+    BuildArchive => "build archive",
+    Emit280nPlist => "emit 280NPLIST",
   }
 }
 
@@ -138,18 +132,16 @@ pub struct TargetContext {
   pub config: ConvertConfig,
   pub parsed: Option<ParseXibXmlResult>,
   pub flattened: Option<FlattenObjectGraphResult>,
-  pub interned: Option<InternStringsResult>,
-  pub resolved: Option<ResolveUidReferencesResult>,
-  pub emitted: Option<EmitCapp2PlistResult>,
+  pub archive: Option<BuildArchiveResult>,
+  pub emitted: Option<Emit280nPlistResult>,
 }
 
 fn target_phase_diags(phase: TargetPhase, ctx: Ref<TargetContext>) -> Slice<Diagnostic> {
   match phase {
     ParseXibXml => ctx.parsed.map_or([], |r| r.diags),
     FlattenObjectGraph => ctx.flattened.map_or([], |r| r.diags),
-    InternStrings => ctx.interned.map_or([], |r| r.diags),
-    ResolveUidReferences => ctx.resolved.map_or([], |r| r.diags),
-    EmitCapp2Plist => ctx.emitted.map_or([], |r| r.diags),
+    BuildArchive => ctx.archive.map_or([], |r| r.diags),
+    Emit280nPlist => ctx.emitted.map_or([], |r| r.diags),
   }
 }
 

@@ -164,3 +164,16 @@ XIB encodes fonts by family name and size. At the default system size (13pt), a 
 
 ## Legacy Code Location
 The legacy Objective-J implementation lives at `CappuccinoSource/tools/nib2cib/`. The ~90 `NS*.j` files there contain the per-class `NS_initWithCoder:` categories and `classForKeyedArchiver` implementations. These are the authoritative source for what XIB keys each class reads and what CP archive keys each class writes, and serve as the primary reference for implementing the runtime `mapNativeToCapp:` logic.
+## 6. Future Maintenance: The XPath Paradigm
+
+The current `FlattenObjectGraph` phase (`phase03`) uses an explicitly recursive function (`walk_children`) to traverse the XML tree. While performant and correct, recursive visitor patterns carry imperative "plumbing" (state threading, accumulators, stack management) that can be unintuitive for developers whose primary expertise is application development rather than compiler construction.
+
+The XIB input is a standard XML document. Conceptually, the task of extracting all `id`-bearing objects and their local members is not a tree-traversal problem, but a **declarative selection problem**. 
+
+In the future, maintainers should consider replacing the hand-written recursive walker with an XPath evaluation library (e.g., `antchfx/xmlquery`). Doing so would align the implementation with Lisette's declarative, ML-family strengths and drastically improve readability:
+
+*   **Object Discovery:** Instead of manually recursing to find `id`-bearing elements, a simple query selects them: `//*[@id]`
+*   **Containment References:** Instead of threading a `path` accumulator to track wrappers, a query explicitly asks for nearest ancestors: `ancestor::*[@id][1]`
+*   **Plain Values:** Instead of checking if a node has children, a query asks for leaf wrappers: `child::*[not(@id) and not(descendant::*[@id])]`
+
+Expressing the flattening logic as XPath queries makes the compiler's "zero-knowledge boundary" explicit and visually obvious. It translates the compiler's intent from "how to walk the tree" to "what to extract from the tree," making the codebase far more approachable for community contributors who may be experts in their academic disciplines, but non-specialists in compiler architecture.
