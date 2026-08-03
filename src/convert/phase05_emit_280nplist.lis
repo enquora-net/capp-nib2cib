@@ -82,7 +82,7 @@ pub fn run_emit_280nplist(ctx: Ref<TargetContext>) -> Result<Emit280nPlistResult
   let mut b = strings.Builder {}
 
   // Header
-  b.WriteString("280NPLIST;2.0;\n")
+  b.WriteString("280NPLIST;2.0;")
 
   // Root Dictionary
   b.WriteString("D;")

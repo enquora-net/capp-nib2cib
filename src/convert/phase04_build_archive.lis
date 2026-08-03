@@ -158,8 +158,8 @@ pub fn run_build_archive(ctx: Ref<TargetContext>) -> Result<BuildArchiveResult, 
     idx += 1
   }
 
-  // The root object is the first one processed (the <document> element)
-  let root_uid = 1
+  // The root object is the <document> element, which was appended last in FlattenObjectGraph.
+  let root_uid = find_object_uid(builder.object_uids, "document").unwrap_or(1)
 
   if !ctx.config.quiet {
     fmt.Println(
