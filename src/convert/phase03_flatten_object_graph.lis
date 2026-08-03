@@ -110,6 +110,24 @@ fn flatten_into(
   table.* = table.*.append(FlattenedObject { id, tag: node.tag, key, members })
 }
 
+// find_descendant_id_nodes recursively searches a subtree for ANY nodes
+// possessing an `id` attribute, at any depth. This ensures we correctly
+// extract buried objects rather than treating their wrapper as a plain value.
+fn find_descendant_id_nodes(node: Ref<XibNode>) -> Slice<XibNode> {
+  let mut found: Slice<XibNode> = []
+  for child in node.children {
+    if find_attr(&child, "id").is_some() {
+      found = found.append(child)
+    } else {
+      let deeper = find_descendant_id_nodes(&child)
+      for d in deeper {
+        found = found.append(d)
+      }
+    }
+  }
+  found
+}
+
 fn walk_children(
   children: Ref<Slice<XibNode>>,
   table: Ref<Slice<FlattenedObject>>,
@@ -127,26 +145,26 @@ fn walk_children(
       },
       None => {
         let wrapper_key = find_attr(&child, "key").unwrap_or(child.tag)
+        let descendants = find_descendant_id_nodes(&child)
 
-        // Check if this wrapper contains id-bearing children (i.e., it's an array)
-        let mut has_id_children = false
-        for inner in child.children {
-          if find_attr(&inner, "id").is_some() {
-            has_id_children = true
-            break
-          }
-        }
-
-        if has_id_children {
-          // Synthesize an array object to maintain valid dictionary keys
+        if descendants.is_empty() {
+          // It's a plain value (e.g., <rect>, <modifierMask>)
+          members = members.append(
+            FlatMember { key: wrapper_key, target_id: None, value: Some(child) },
+          )
+        } else {
+          // It's a wrapper. Synthesize an array and extract all descendants.
           let array_id = f"__array_{next_array_id.*}"
           next_array_id.* += 1
 
-          let array_members = walk_children(
-            &child.children,
-            table,
-            next_array_id,
-          )
+          let mut array_members: Slice<FlatMember> = []
+          for desc in descendants {
+            let desc_id = find_attr(&desc, "id").unwrap_or("")
+            array_members = array_members.append(
+              FlatMember { key: "", target_id: Some(desc_id), value: None },
+            )
+            flatten_into(&desc, table, next_array_id)
+          }
 
           table.* = table.*.append(
             FlattenedObject {
@@ -163,11 +181,6 @@ fn walk_children(
               target_id: Some(array_id),
               value: None,
             },
-          )
-        } else {
-          // It's a plain value.
-          members = members.append(
-            FlatMember { key: wrapper_key, target_id: None, value: Some(child) },
           )
         }
       },
