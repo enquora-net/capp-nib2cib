@@ -236,15 +236,22 @@ fn execute_targets(targets: Slice<ConvertTarget>, cfg: ConvertConfig) -> Slice<T
     }
   }
 
-  // TODO: The `received` counter currently increments even if `results_ch.receive()`
-  // returns None. This can cause the loop to terminate early and drop target results.
-  // Defer fix: update to only increment `received` inside a `Some(r)` match arm.
-  let mut results: Slice<TargetResult> = []
-  let mut received = 0
-  while received < targets.length() {
-    if let Some(r) = results_ch.receive() { results = results.append(r) }
-    received += 1
-  }
+	let mut results: Slice<TargetResult> = []
+	let mut received = 0
+	while received < targets.length() {
+		match results_ch.receive() {
+			Some(r) => {
+				results = results.append(r)
+				received += 1
+			},
+			None => {
+				// Depending on Lisette's channel semantics, a None here
+				// implies the channel was closed or empty. Break to avoid
+				// an infinite loop or dropping results.
+				break
+			}
+		}
+	}
   results
 }
 
