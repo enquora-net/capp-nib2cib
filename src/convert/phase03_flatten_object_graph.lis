@@ -7,34 +7,13 @@
 //
 // TargetPhase: FlattenObjectGraph
 //
-// Flattens the XibNode tree from ParseXibXml into a flat table of
-// FlattenedObject rows, one per id-bearing element anywhere in the tree,
-// regardless of nesting depth. Per README.md's architecture: this tool has
-// zero semantic knowledge of AppKit — it never reads a tag name or an
-// attribute's meaning to decide anything.
-//
-// Every attribute and every child of an id-bearing object becomes exactly
-// one FlatMember, with no separate unguarded bucket alongside it. A member
-// is one of two things:
-//   - a reference (target_id: Some) to another row in the table
-//   - an embedded plain value (value: Some) — data, not identity
-//
-// Two, and only two, structural signals decide which:
-//   - id presence: a child ELEMENT that carries its own id is a reference
-//     to that element's own row (a containment reference).
-//   - a small fixed set of ATTRIBUTE names — target, destination — whose
-//     value equals another element's id anywhere in the document (a
-//     cross-reference, e.g. <action target="-2" .../>). This set comes
-//     from the XIB connection grammar itself (<outlet>/<action> elements),
-//     not from any AppKit class knowledge.
-//
-// Per v2.0 Schema: Containment references use a single local key (the
-// child's `key` attribute or the wrapper element's tag name). Deep path
-// accumulation is not required. The root <document> element is forcibly
-// registered as the root object of the flat table.
+// Uses XPath queries to declaratively extract objects and members,
+// replacing the fragile imperative recursive walker. This guarantees
+// mathematically exhaustive evaluation of the XML topology.
 //
 // **
 import "go:fmt"
+import "go:github.com/antchfx/xmlquery"
 
 fn reference_attrs() -> Slice<string> {
   ["target", "destination"]
@@ -47,10 +26,15 @@ fn is_reference_attr(name: string) -> bool {
   false
 }
 
+pub enum FlatValue {
+  Str(string),
+  Node(Ref<xmlquery.Node>),
+}
+
 pub struct FlatMember {
   pub key: string,
   pub target_id: Option<string>,
-  pub value: Option<XibNode>,
+  pub value: Option<FlatValue>,
 }
 
 pub struct FlattenedObject {
@@ -65,61 +49,20 @@ pub struct FlattenObjectGraphResult {
   pub objects: Slice<FlattenedObject>,
 }
 
-fn find_attr(node: Ref<XibNode>, key: string) -> Option<string> {
-  for a in node.attrs {
-    if a.key == key { return Some(a.value) }
-  }
-  None
-}
-
-fn attr_members(node: Ref<XibNode>) -> Slice<FlatMember> {
-  let mut members: Slice<FlatMember> = []
-  for a in node.attrs {
-    if a.key == "id" || a.key == "key" { continue }
-    if is_reference_attr(a.key) {
-      members = members.append(
-        FlatMember { key: a.key, target_id: Some(a.value), value: None },
-      )
-    } else {
-      members = members.append(
-        FlatMember {
-          key: a.key,
-          target_id: None,
-          value: Some(
-            XibNode { tag: a.key, attrs: [], children: [], text: a.value },
-          ),
-        },
-      )
-    }
-  }
-  members
-}
-
-fn flatten_into(
-  node: Ref<XibNode>,
-  table: Ref<Slice<FlattenedObject>>,
-  next_array_id: Ref<int>,
-) {
-  let id = find_attr(node, "id").unwrap_or("")
-  let key = find_attr(node, "key")
-  let mut members = attr_members(node)
-  let child_members = walk_children(&node.children, table, next_array_id)
-  for m in child_members {
-    members = members.append(m)
-  }
-  table.* = table.*.append(FlattenedObject { id, tag: node.tag, key, members })
-}
-
-// find_descendant_id_nodes recursively searches a subtree for ANY nodes
-// possessing an `id` attribute, at any depth. This ensures we correctly
-// extract buried objects rather than treating their wrapper as a plain value.
-fn find_descendant_id_nodes(node: Ref<XibNode>) -> Slice<XibNode> {
-  let mut found: Slice<XibNode> = []
-  for child in node.children {
-    if find_attr(&child, "id").is_some() {
+// find_nearest_id_descendants recursively searches a subtree for
+// id-bearing nodes, but stops descending down a branch as soon as it
+// finds one. This ensures we respect object containment boundaries.
+fn find_nearest_id_descendants(node: Ref<xmlquery.Node>) -> Slice<Ref<xmlquery.Node>> {
+  let mut found: Slice<Ref<xmlquery.Node>> = []
+  let children = xmlquery.Find(node, "child::*")
+  for child in children {
+    let child_id = child.SelectAttr("id")
+    if child_id != "" {
+      // Found an id-bearing node. Stop descending this branch.
       found = found.append(child)
     } else {
-      let deeper = find_descendant_id_nodes(&child)
+      // No id here. Keep descending.
+      let deeper = find_nearest_id_descendants(child)
       for d in deeper {
         found = found.append(d)
       }
@@ -128,64 +71,88 @@ fn find_descendant_id_nodes(node: Ref<XibNode>) -> Slice<XibNode> {
   found
 }
 
-fn walk_children(
-  children: Ref<Slice<XibNode>>,
+// extract_members uses XPath to find attributes and child elements,
+// correctly classifying them as references, arrays, or plain values.
+fn extract_members(
+  node: Ref<xmlquery.Node>,
   table: Ref<Slice<FlattenedObject>>,
   next_array_id: Ref<int>,
 ) -> Slice<FlatMember> {
   let mut members: Slice<FlatMember> = []
-  for child in children.* {
-    match find_attr(&child, "id") {
-      Some(child_id) => {
-        let key = find_attr(&child, "key").unwrap_or(child.tag)
-        members = members.append(
-          FlatMember { key, target_id: Some(child_id), value: None },
-        )
-        flatten_into(&child, table, next_array_id)
-      },
-      None => {
-        let wrapper_key = find_attr(&child, "key").unwrap_or(child.tag)
-        let descendants = find_descendant_id_nodes(&child)
 
-        if descendants.is_empty() {
-          // It's a plain value (e.g., <rect>, <modifierMask>)
-          members = members.append(
-            FlatMember { key: wrapper_key, target_id: None, value: Some(child) },
-          )
-        } else {
-          // It's a wrapper. Synthesize an array and extract all descendants.
-          let array_id = f"__array_{next_array_id.*}"
-          next_array_id.* += 1
+  // 1. Attributes (excluding id and key)
+  for attr in node.Attr {
+    let name = attr.Name.Local
+    if name == "id" || name == "key" { continue }
 
-          let mut array_members: Slice<FlatMember> = []
-          for desc in descendants {
-            let desc_id = find_attr(&desc, "id").unwrap_or("")
-            array_members = array_members.append(
-              FlatMember { key: "", target_id: Some(desc_id), value: None },
-            )
-            flatten_into(&desc, table, next_array_id)
-          }
-
-          table.* = table.*.append(
-            FlattenedObject {
-              id: array_id,
-              tag: "array",
-              key: None,
-              members: array_members,
-            },
-          )
-
-          members = members.append(
-            FlatMember {
-              key: wrapper_key,
-              target_id: Some(array_id),
-              value: None,
-            },
-          )
-        }
-      },
+    if is_reference_attr(name) {
+      members = members.append(
+        FlatMember { key: name, target_id: Some(attr.Value), value: None },
+      )
+    } else {
+      members = members.append(
+        FlatMember {
+          key: name,
+          target_id: None,
+          value: Some(FlatValue.Str(attr.Value)),
+        },
+      )
     }
   }
+
+  // 2. Child Elements
+  let children = xmlquery.Find(node, "child::*")
+  for child in children {
+    let wrapper_key_attr = child.SelectAttr("key")
+    let key = if wrapper_key_attr == "" { child.Data } else { wrapper_key_attr }
+
+    let child_id_attr = child.SelectAttr("id")
+    if child_id_attr != "" {
+      // Direct id-bearing child: containment reference
+      members = members.append(
+        FlatMember { key, target_id: Some(child_id_attr), value: None },
+      )
+    } else {
+      // Check for nearest id-bearing descendants to respect boundaries
+      let descendants = find_nearest_id_descendants(child)
+      if descendants.is_empty() {
+        // No id-bearing descendants: plain value
+        members = members.append(
+          FlatMember {
+            key,
+            target_id: None,
+            value: Some(FlatValue.Node(child)),
+          },
+        )
+      } else {
+        // Has id-bearing descendants: synthesize an array wrapper
+        let array_id = f"__array_{next_array_id.*}"
+        next_array_id.* += 1
+
+        let mut array_members: Slice<FlatMember> = []
+        for desc in descendants {
+          let desc_id = desc.SelectAttr("id")
+          array_members = array_members.append(
+            FlatMember { key: "", target_id: Some(desc_id), value: None },
+          )
+        }
+
+        table.* = table.*.append(
+          FlattenedObject {
+            id: array_id,
+            tag: "array",
+            key: None,
+            members: array_members,
+          },
+        )
+
+        members = members.append(
+          FlatMember { key, target_id: Some(array_id), value: None },
+        )
+      }
+    }
+  }
+
   members
 }
 
@@ -198,6 +165,7 @@ pub fn run_flatten_object_graph(ctx: Ref<TargetContext>) -> Result<FlattenObject
       },
     )
   }
+
   let Some(tree) = parsed.tree else {
     return Ok(
       FlattenObjectGraphResult {
@@ -210,15 +178,27 @@ pub fn run_flatten_object_graph(ctx: Ref<TargetContext>) -> Result<FlattenObject
   let mut table: Slice<FlattenedObject> = []
   let mut next_array_id = 1
 
-  let doc_members = walk_children(&tree.children, &table, &next_array_id)
+  // 1. Extract the root <document> element
+  let doc_members = extract_members(tree, &table, &next_array_id)
   table = table.append(
     FlattenedObject {
       id: "document",
-      tag: tree.tag,
+      tag: tree.Data,
       key: None,
       members: doc_members,
     },
   )
+
+  // 2. Extract all id-bearing objects anywhere in the document
+  let id_nodes = xmlquery.Find(tree, "descendant::*[@id]")
+  for node in id_nodes {
+    let id = node.SelectAttr("id")
+    let key_attr = node.SelectAttr("key")
+    let key = if key_attr == "" { None } else { Some(key_attr) }
+
+    let members = extract_members(node, &table, &next_array_id)
+    table = table.append(FlattenedObject { id, tag: node.Data, key, members })
+  }
 
   if table.is_empty() {
     if !ctx.config.quiet {

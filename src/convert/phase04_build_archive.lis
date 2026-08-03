@@ -1,3 +1,4 @@
+import "go:fmt"
 //**
 // convert/phase04_build_archive.lis
 // capp-nib2cib
@@ -12,7 +13,7 @@
 // class descriptors in a single unified pass.
 //
 // **
-import "go:fmt"
+import "go:github.com/antchfx/xmlquery"
 
 pub enum ArchiveObject {
   Null,
@@ -90,21 +91,21 @@ impl ArchiveBuilder {
     self.add_object(ArchiveObject.Class { name, classes })
   }
 
-  fn serialize_value(self: Ref<ArchiveBuilder>, node: Ref<XibNode>) -> int {
-    if node.attrs.is_empty() && node.children.is_empty() {
-      return self.intern_string(node.text)
-    }
-
-    let class_uid = self.intern_class(node.tag)
+  // Updated to handle xmlquery.Node
+  fn serialize_node(self: Ref<ArchiveBuilder>, node: Ref<xmlquery.Node>) -> int {
+    let class_uid = self.intern_class(node.Data)
     let mut members: Slice<ArchiveMember> = []
 
-    for a in node.attrs {
-      let val_uid = self.intern_string(a.value)
-      members = members.append(ArchiveMember { key: a.key, uid: val_uid })
+    for attr in node.Attr {
+      let val_uid = self.intern_string(attr.Value)
+      members = members.append(
+        ArchiveMember { key: attr.Name.Local, uid: val_uid },
+      )
     }
 
-    if node.text != "" {
-      let val_uid = self.intern_string(node.text)
+    let text = node.InnerText()
+    if text != "" {
+      let val_uid = self.intern_string(text)
       members = members.append(ArchiveMember { key: "text", uid: val_uid })
     }
 
@@ -159,7 +160,11 @@ pub fn run_build_archive(ctx: Ref<TargetContext>) -> Result<BuildArchiveResult, 
         let val_uid = if let Some(id) = m.target_id {
           find_object_uid(builder.object_uids, id).unwrap_or(0)
         } else if let Some(v) = m.value {
-          (&builder).serialize_value(&v)
+          // Handle the new FlatValue enum
+          match v {
+            FlatValue.Str(s) => (&builder).intern_string(s),
+            FlatValue.Node(node) => (&builder).serialize_node(node),
+          }
         } else {
           0
         }
@@ -170,7 +175,6 @@ pub fn run_build_archive(ctx: Ref<TargetContext>) -> Result<BuildArchiveResult, 
     idx += 1
   }
 
-  // The root object is the <document> element, which was appended last in FlattenObjectGraph.
   let root_uid = find_object_uid(builder.object_uids, "document").unwrap_or(1)
 
   if !ctx.config.quiet {

@@ -8,3 +8,19 @@ version = "0.1.0"
 "github.com/cpuguy83/go-md2man/v2" = { version = "v2.0.6", via = ["github.com/spf13/cobra"] }
 "github.com/russross/blackfriday/v2" = { version = "v2.1.0", via = ["github.com/cpuguy83/go-md2man/v2"] }
 "go.yaml.in/yaml/v3" = { version = "v3.0.4", via = ["github.com/spf13/cobra"] }
+"github.com/antchfx/xmlquery" = "v1.5.1"
+"github.com/antchfx/xpath" = { version = "v1.3.6", via = ["github.com/antchfx/xmlquery"] }
+"github.com/golang/groupcache" = { version = "v0.0.0-20210331224755-41bb18bfe9da", via = ["github.com/antchfx/xmlquery"] }
+"github.com/golang/protobuf" = { version = "v1.5.4", via = ["github.com/golang/groupcache"] }
+"github.com/google/go-cmp" = { version = "v0.6.0", via = ["google.golang.org/protobuf"] }
+"github.com/yuin/goldmark" = { version = "v1.4.13", via = ["golang.org/x/tools"] }
+"golang.org/x/crypto" = { version = "v0.31.0", via = ["golang.org/x/net"] }
+"golang.org/x/mod" = { version = "v0.17.0", via = ["golang.org/x/tools"] }
+"golang.org/x/net" = { version = "v0.33.0", via = ["github.com/antchfx/xmlquery", "golang.org/x/crypto", "golang.org/x/tools"] }
+"golang.org/x/sync" = { version = "v0.10.0", via = ["golang.org/x/telemetry", "golang.org/x/tools"] }
+"golang.org/x/sys" = { version = "v0.28.0", via = ["golang.org/x/crypto", "golang.org/x/net", "golang.org/x/term"] }
+"golang.org/x/telemetry" = { version = "v0.0.0-20240228155512-f48c80bd79b2", via = ["golang.org/x/tools"] }
+"golang.org/x/term" = { version = "v0.27.0", via = ["golang.org/x/crypto", "golang.org/x/net"] }
+"golang.org/x/text" = { version = "v0.21.0", via = ["golang.org/x/net"] }
+"golang.org/x/tools" = { version = "v0.21.1-0.20240508182429-e35e4ccd0d2d", via = ["golang.org/x/text"] }
+"google.golang.org/protobuf" = { version = "v1.33.0", via = ["github.com/golang/protobuf"] }

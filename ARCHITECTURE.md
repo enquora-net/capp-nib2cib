@@ -164,15 +164,4 @@ XIB encodes fonts by family name and size. At the default system size (13pt), a 
 
 ## Legacy Code Location
 The legacy Objective-J implementation lives at `CappuccinoSource/tools/nib2cib/`. The ~90 `NS*.j` files there contain the per-class `NS_initWithCoder:` categories and `classForKeyedArchiver` implementations. These are the authoritative source for what XIB keys each class reads and what CP archive keys each class writes, and serve as the primary reference for implementing the runtime `mapNativeToCapp:` logic.
-## 6. Future Maintenance: The XPath Imperative
 
-The current FlattenObjectGraph phase (phase03) uses an explicitly recursive function (walk_children) to traverse the XML tree. While performant, imperative tree-walking is a structural liability. It forces the developer to manually encode every possible topological permutation (e.g., "what if a wrapper is three levels deep?"). As recently demonstrated during testing, it is trivially easy to write a walker that works perfectly on 99% of files but silently swallows data on a deeply nested edge case. These are not logic bugs; they are topology assumption bugs.
-
-The XIB input is a standard XML document. Conceptually, the task of extracting all id-bearing objects and their local members is not a tree-traversal problem, but a declarative selection problem.
-
-Replacing the hand-written recursive walker with an XPath evaluation library (e.g., antchfx/xmlquery) is not merely a stylistic preference; it is a robustness mandate. It shifts the burden from "how to walk the tree" to "what to extract from the tree," ensuring mathematically exhaustive evaluation:
-
-- Object Discovery: Instead of manually recursing to find id-bearing elements, a query selects them exhaustively: //*[@id]
-- Containment References: Instead of threading a path accumulator to track wrappers, a query explicitly asks for nearest ancestors: ancestor::*[@id][1]
-- Plain Values vs. Arrays: Instead of manually checking if a node has children (and risking missing a buried descendant), a query uses the descendant axis to ask definitively if a wrapper contains id-bearing elements: descendant::*[@id]. If 0, it is a plain value; if 1 or more, it is an array.
-Declarative pattern matching aligns with Lisette's ML-family strengths. It makes the compiler's "zero-knowledge boundary" explicit and mathematically sound, ensuring the codebase remains robust and approachable for community contributors who are experts in their academic disciplines, but non-specialists in compiler topology.
