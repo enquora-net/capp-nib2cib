@@ -11,7 +11,6 @@
 // v2.0 text format and writes it to the target .cib file.
 //
 // **
-import "go:fmt"
 import "go:os"
 import "go:strings"
 
@@ -115,8 +114,8 @@ pub fn run_emit_280nplist(ctx: Ref<TargetContext>) -> Result<Emit280nPlistResult
   let output = b.String()
   os.WriteFile(ctx.target.cib_path, output as Slice<byte>, 0o644)?
 
-  if !ctx.config.quiet {
-    fmt.Println(
+  if ctx.config.verbose >= 1 {
+    ctx.messages = ctx.messages.append(
       f"\u{2713}  emit-280nplist: {ctx.target.cib_path} ({output.length()} bytes)",
     )
   }

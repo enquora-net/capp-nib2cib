@@ -1,4 +1,3 @@
-import "go:fmt"
 //**
 // convert/phase04_build_archive.lis
 // capp-nib2cib
@@ -177,8 +176,8 @@ pub fn run_build_archive(ctx: Ref<TargetContext>) -> Result<BuildArchiveResult, 
 
   let root_uid = find_object_uid(builder.object_uids, "document").unwrap_or(1)
 
-  if !ctx.config.quiet {
-    fmt.Println(
+  if ctx.config.verbose >= 1 {
+    ctx.messages = ctx.messages.append(
       f"\u{2713}  build-archive: {ctx.target.xib_path} ({builder.objects.length()} archive objects)",
     )
   }

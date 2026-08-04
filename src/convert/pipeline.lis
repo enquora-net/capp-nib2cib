@@ -42,6 +42,7 @@
 // single-target case.
 //
 // **
+import "go:fmt"
 import "go:strings"
 
 // ---------------------------------------------------------------------------
@@ -104,6 +105,15 @@ fn target_phase_name(phase: TargetPhase) -> string {
 // is the only place that interprets it and the only place a CIB output path
 // is computed — output is never taken from the command line. See
 // resolve_project_paths.lis.
+//
+// Output tiers (Unix convention — silent on success, loud on failure):
+//   -q          print nothing at all
+//   (default)   one summary line; per-file failure diagnostics still print
+//   -v / -vv..  the per-phase trace (✓ parse-xib-xml, …), buffered per file
+//               so a single target's lines never interleave with another's
+//               under concurrent dispatch. Levels >1 are accepted and
+//               equivalent to 1; the slot is reserved for a future noisier
+//               tier.
 pub struct ConvertConfig {
   pub input: string,
   pub default_theme: string,
@@ -134,6 +144,12 @@ pub struct TargetContext {
   pub flattened: Option<FlattenObjectGraphResult>,
   pub archive: Option<BuildArchiveResult>,
   pub emitted: Option<Emit280nPlistResult>,
+  // Buffered per-phase status lines for this target only. Each phase
+  // appends its ✓ line here (gated on ctx.config.verbose >= 1) instead of
+  // printing directly; execute_targets flushes the whole block as one
+  // atomic write when the result arrives, so a file's lines can never
+  // interleave with another file's under concurrent dispatch.
+  pub messages: Slice<string>,
 }
 
 fn target_phase_diags(phase: TargetPhase, ctx: Ref<TargetContext>) -> Slice<Diagnostic> {
@@ -165,6 +181,7 @@ pub struct TargetResult {
   pub ok: bool,
   pub message: string,
   pub diags: Slice<Diagnostic>,
+  pub messages: Slice<string>,
 }
 
 // run_target runs every TargetPhase for one file, start to finish, halting
@@ -199,6 +216,7 @@ fn run_target(target: ConvertTarget, cfg: ConvertConfig) -> TargetResult {
         ok: false,
         message: f"{ctx.target.xib_path}: error in {target_phase_name(phase)}: {e}",
         diags: [],
+        messages: ctx.messages,
       }
     }
     let diags = target_phase_diags(phase, &ctx)
@@ -209,6 +227,7 @@ fn run_target(target: ConvertTarget, cfg: ConvertConfig) -> TargetResult {
         ok: false,
         message: f"{ctx.target.xib_path}: halted, {n} error(s) in {target_phase_name(phase)}",
         diags,
+        messages: ctx.messages,
       }
     }
   }
@@ -218,6 +237,7 @@ fn run_target(target: ConvertTarget, cfg: ConvertConfig) -> TargetResult {
     ok: true,
     message: f"{ctx.target.xib_path}: converted",
     diags: [],
+    messages: ctx.messages,
   }
 }
 
@@ -236,22 +256,29 @@ fn execute_targets(targets: Slice<ConvertTarget>, cfg: ConvertConfig) -> Slice<T
     }
   }
 
-	let mut results: Slice<TargetResult> = []
-	let mut received = 0
-	while received < targets.length() {
-		match results_ch.receive() {
-			Some(r) => {
-				results = results.append(r)
-				received += 1
-			},
-			None => {
-				// Depending on Lisette's channel semantics, a None here
-				// implies the channel was closed or empty. Break to avoid
-				// an infinite loop or dropping results.
-				break
-			}
-		}
-	}
+  let mut results: Slice<TargetResult> = []
+  let mut received = 0
+  while received < targets.length() {
+    match results_ch.receive() {
+      Some(r) => {
+        // Flush this target's buffered trace as a single atomic
+        // write. The receive loop runs on the main goroutine, so
+        // flushes serialize naturally and one file's lines can
+        // never interleave with another's.
+        if r.messages.length() > 0 {
+          fmt.Print(strings.Join(r.messages, "\n") + "\n")
+        }
+        results = results.append(r)
+        received += 1
+      },
+      None => {
+        // Depending on Lisette's channel semantics, a None here
+        // implies the channel was closed or empty. Break to avoid
+        // an infinite loop or dropping results.
+        break
+      },
+    }
+  }
   results
 }
 

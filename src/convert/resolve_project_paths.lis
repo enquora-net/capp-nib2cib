@@ -190,16 +190,16 @@ pub fn run_resolve_project_paths(config: Ref<ConvertConfig>) -> Result<ResolvePr
   let targets = expand_input(config.input, &root)?
 
   // Status output: this is the only step whose success is otherwise
-  // invisible to the user. Gated by --quiet; per-target detail additionally
-  // gated by --verbose.
-  if !config.quiet {
+  // invisible to the user. Like the per-phase trace, it is plumbing rather
+  // than user-facing work, so it sits behind --verbose rather than the
+  // default tier. This step runs once, sequentially, before any target
+  // worker starts, so it never interleaves and needs no buffering.
+  if config.verbose >= 1 {
     fmt.Println(
       f"✓  resolve-project-paths: root={root.path} targets={targets.length()}",
     )
-    if config.verbose >= 1 {
-      for t in targets {
-        fmt.Println(f"     {t.xib_path} -> {t.cib_path}")
-      }
+    for t in targets {
+      fmt.Println(f"     {t.xib_path} -> {t.cib_path}")
     }
   }
 

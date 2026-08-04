@@ -12,7 +12,6 @@
 // mathematically exhaustive evaluation of the XML topology.
 //
 // **
-import "go:fmt"
 import "go:github.com/antchfx/xmlquery"
 
 fn reference_attrs() -> Slice<string> {
@@ -201,8 +200,8 @@ pub fn run_flatten_object_graph(ctx: Ref<TargetContext>) -> Result<FlattenObject
   }
 
   if table.is_empty() {
-    if !ctx.config.quiet {
-      fmt.Println(
+    if ctx.config.verbose >= 1 {
+      ctx.messages = ctx.messages.append(
         f"\u{2715}  flatten-object-graph: {ctx.target.xib_path}: no id-bearing objects found",
       )
     }
@@ -216,8 +215,8 @@ pub fn run_flatten_object_graph(ctx: Ref<TargetContext>) -> Result<FlattenObject
     )
   }
 
-  if !ctx.config.quiet {
-    fmt.Println(
+  if ctx.config.verbose >= 1 {
+    ctx.messages = ctx.messages.append(
       f"\u{2713}  flatten-object-graph: {ctx.target.xib_path} ({table.length()} objects)",
     )
   }
